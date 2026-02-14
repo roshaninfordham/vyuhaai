@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 import time
 import uuid
@@ -64,6 +65,7 @@ except Exception:
     _BLAXEL_TELEMETRY = False
 
 from agent.src import commander, security  # noqa: E402
+from agent.src.learning_engine import get_insights, record_event  # noqa: E402
 from agent.src.orbit_tools import check_conjunction_risk  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -78,7 +80,7 @@ logger = logging.getLogger("vyuha.main")
 # ---------------------------------------------------------------------------
 # Agent-loop config
 # ---------------------------------------------------------------------------
-MAX_RETRIES: int = 3
+MAX_RETRIES: int = int(os.getenv("MAX_RETRIES", "3"))
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models
@@ -166,6 +168,29 @@ async def health_check():
     }
 
 
+@app.get("/")
+async def root():
+    return {
+        "service": "vyuha-ai",
+        "status": "online",
+        "message": "Vyuha AI backend is running. Use /docs or API endpoints.",
+        "endpoints": ["/health", "/scan", "/act", "/insights", "/docs"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Runtime insights — transparent autonomous learning view
+# ---------------------------------------------------------------------------
+
+@app.get("/insights")
+async def runtime_insights():
+    return {
+        "status": "ok",
+        "generated_at": time.time(),
+        "insights": get_insights(),
+    }
+
+
 # ---------------------------------------------------------------------------
 # POST /scan — Orbit Engine
 # ---------------------------------------------------------------------------
@@ -186,6 +211,7 @@ async def scan_satellite(
         When ``True``, forces a CRITICAL collision scenario while keeping
         the real satellite position (Hybrid Demo Mode).
     """
+    started = time.perf_counter()
     try:
         risk_data = await asyncio.to_thread(
             check_conjunction_risk,
@@ -193,6 +219,7 @@ async def scan_satellite(
             "",                       # auto-fetch TLE
             simulate_danger,          # force_critical flag
         )
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         logger.info(
             "Scan complete for %s — prob=%.4f status=%s mode=%s source=%s",
             request.satellite_id,
@@ -201,12 +228,35 @@ async def scan_satellite(
             risk_data.get("scenario_mode", "?"),
             risk_data.get("data_source", "?"),
         )
+        record_event(
+            "scan",
+            {
+                "satellite_id": request.satellite_id,
+                "simulate_danger": simulate_danger,
+                "status": risk_data.get("status"),
+                "scenario_mode": risk_data.get("scenario_mode"),
+                "collision_probability": risk_data.get("collision_probability"),
+                "distance_to_debris_km": risk_data.get("distance_to_debris_km"),
+                "latency_ms": elapsed_ms,
+            },
+        )
         return {
             "satellite_id": request.satellite_id,
             "risk_data": risk_data,
+            "latency_ms": elapsed_ms,
         }
     except Exception as exc:
         logger.error("Orbit propagation failed: %s", exc)
+        record_event(
+            "scan",
+            {
+                "satellite_id": request.satellite_id,
+                "simulate_danger": simulate_danger,
+                "status": "ERROR",
+                "error": str(exc),
+                "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            },
+        )
         raise HTTPException(
             status_code=500,
             detail=f"Orbit propagation failed: {exc}",
@@ -227,13 +277,16 @@ async def act_on_risk(request: ManeuverRequest):
        so it can self-correct (up to ``MAX_RETRIES`` attempts).
     4. If all retries fail, a MANUAL_OVERRIDE response is returned.
     """
+    started = time.perf_counter()
     risk_data = request.risk_data
     session_id = request.session_id
 
     rejection_reason: str | None = None
     attempts_log: list[dict] = []
+    workflow_trace: list[dict] = []
 
     for attempt in range(1, MAX_RETRIES + 1):
+        attempt_started = time.perf_counter()
         # --- Step 1: Commander decides (sync → thread to avoid blocking) --
         ai_response = await asyncio.to_thread(
             commander.analyze_situation,
@@ -255,6 +308,17 @@ async def act_on_risk(request: ManeuverRequest):
                 "violation_tags": validation["violation_tags"],
             },
         })
+        workflow_trace.append(
+            {
+                "attempt": attempt,
+                "decision_action": ai_response.get("action"),
+                "decision_reasoning": ai_response.get("reasoning", ""),
+                "validation_valid": validation["valid"],
+                "validation_source": validation["source"],
+                "violation_tags": validation["violation_tags"],
+                "attempt_latency_ms": round((time.perf_counter() - attempt_started) * 1000, 2),
+            },
+        )
 
         if validation["valid"]:
             # --- Safe — execute and return --------------------------------
@@ -262,12 +326,27 @@ async def act_on_risk(request: ManeuverRequest):
                 "[%s] EXECUTED on attempt %d — action=%s",
                 session_id, attempt, ai_response.get("action"),
             )
+            total_latency_ms = round((time.perf_counter() - started) * 1000, 2)
+            record_event(
+                "act",
+                {
+                    "session_id": session_id,
+                    "status": "EXECUTED",
+                    "attempts": attempt,
+                    "latency_ms": total_latency_ms,
+                    "risk_status": risk_data.get("status"),
+                    "risk_probability": risk_data.get("collision_probability"),
+                    "attempts_log": attempts_log,
+                },
+            )
             return {
                 "status": "EXECUTED",
                 "session_id": session_id,
                 "final_command": ai_response,
                 "attempts": attempt,
                 "attempts_log": attempts_log,
+                "workflow_trace": workflow_trace,
+                "latency_ms": total_latency_ms,
             }
 
         # --- Unsafe — prepare feedback for next iteration -----------------
@@ -283,6 +362,19 @@ async def act_on_risk(request: ManeuverRequest):
     logger.error(
         "[%s] MANUAL_OVERRIDE after %d failed attempts", session_id, MAX_RETRIES,
     )
+    total_latency_ms = round((time.perf_counter() - started) * 1000, 2)
+    record_event(
+        "act",
+        {
+            "session_id": session_id,
+            "status": "MANUAL_OVERRIDE_REQUIRED",
+            "attempts": MAX_RETRIES,
+            "latency_ms": total_latency_ms,
+            "risk_status": risk_data.get("status"),
+            "risk_probability": risk_data.get("collision_probability"),
+            "attempts_log": attempts_log,
+        },
+    )
     return {
         "status": "MANUAL_OVERRIDE_REQUIRED",
         "session_id": session_id,
@@ -293,6 +385,8 @@ async def act_on_risk(request: ManeuverRequest):
         "last_blocked_command": ai_response,
         "attempts": MAX_RETRIES,
         "attempts_log": attempts_log,
+        "workflow_trace": workflow_trace,
+        "latency_ms": total_latency_ms,
     }
 
 
@@ -301,9 +395,12 @@ async def act_on_risk(request: ManeuverRequest):
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    reload_enabled = os.getenv("RELOAD", "false").lower() == "true"
     uvicorn.run(
         "agent.src.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
+        host=host,
+        port=port,
+        reload=reload_enabled,
     )

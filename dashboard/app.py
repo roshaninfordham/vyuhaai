@@ -11,10 +11,12 @@ Run:
 
 from __future__ import annotations
 
-import json
+import os
 from datetime import datetime, timezone
 
 import numpy as np
+import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
@@ -23,7 +25,9 @@ import streamlit as st
 # Configuration
 # ═══════════════════════════════════════════════════════════════════════════
 
-API_URL = "http://localhost:8000"
+API_URL = os.getenv("VYUHA_API_URL", "http://localhost:8000").rstrip("/")
+BLAXEL_API_KEY = os.getenv("BLAXEL_API_KEY", os.getenv("BL_API_KEY", ""))
+BLAXEL_WORKSPACE = os.getenv("BLAXEL_WORKSPACE", "rs")
 
 st.set_page_config(
     page_title="Vyuha AI // Orbital Defense",
@@ -213,6 +217,15 @@ def metric_card(label: str, value: str, style: str = "") -> None:
     )
 
 
+def _request_headers() -> dict:
+    """Build request headers for local and Blaxel-hosted backends."""
+    headers = {"Content-Type": "application/json"}
+    if BLAXEL_API_KEY:
+        headers["X-Blaxel-Authorization"] = f"Bearer {BLAXEL_API_KEY}"
+        headers["X-Blaxel-Workspace"] = BLAXEL_WORKSPACE
+    return headers
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 3D Globe
 # ═══════════════════════════════════════════════════════════════════════════
@@ -221,7 +234,7 @@ def render_globe(lat: float, lon: float, is_critical: bool,
                  altitude_km: float = 400.0,
                  debris_dist_km: float | None = None) -> go.Figure:
 
-    # Satellite
+    # Primary satellite
     traces = [go.Scattergeo(
         lat=[lat], lon=[lon], mode="markers+text",
         marker=dict(size=14, color="#00ff41", symbol="diamond",
@@ -232,6 +245,39 @@ def render_globe(lat: float, lon: float, is_critical: bool,
         hovertemplate=(f"<b>ISS (ZARYA)</b><br>Lat: {lat:.2f}°<br>"
                        f"Lon: {lon:.2f}°<br>Alt: {altitude_km:.1f} km<extra></extra>"),
     )]
+
+    # Nearby satellites for transparent "multi-satellite" situational view
+    offsets = [
+        (2.2, -5.0, "SAT-A"),
+        (-3.4, 4.3, "SAT-B"),
+        (5.1, 1.8, "SAT-C"),
+        (-4.7, -2.6, "SAT-D"),
+    ]
+    for dlat, dlon, label in offsets:
+        traces.append(
+            go.Scattergeo(
+                lat=[lat + dlat],
+                lon=[lon + dlon],
+                mode="markers+text",
+                marker=dict(
+                    size=8,
+                    color="#7CFC00",
+                    symbol="circle",
+                    line=dict(width=1, color="#7CFC00"),
+                    opacity=0.8,
+                ),
+                text=[label],
+                textposition="bottom center",
+                textfont=dict(color="#7CFC00", size=9, family="JetBrains Mono"),
+                name=label,
+                hovertemplate=(
+                    f"<b>{label}</b><br>"
+                    f"Lat: {lat + dlat:.2f}°<br>"
+                    f"Lon: {lon + dlon:.2f}°"
+                    "<extra></extra>"
+                ),
+            )
+        )
 
     if is_critical:
         # Debris — 1° offset
@@ -302,7 +348,9 @@ def render_globe(lat: float, lon: float, is_critical: bool,
 def api_scan(simulate: bool) -> dict | None:
     try:
         r = requests.post(f"{API_URL}/scan?simulate_danger={str(simulate).lower()}",
-                          json={"satellite_id": "ISS"}, timeout=15)
+                          json={"satellite_id": "ISS"},
+                          headers=_request_headers(),
+                          timeout=15)
         r.raise_for_status()
         return r.json()
     except Exception as exc:
@@ -313,11 +361,25 @@ def api_act(risk_data: dict, session_id: str) -> dict | None:
     try:
         r = requests.post(f"{API_URL}/act",
                           json={"risk_data": risk_data, "session_id": session_id},
+                          headers=_request_headers(),
                           timeout=60)
         r.raise_for_status()
         return r.json()
     except Exception as exc:
         add_log(f"AGENT COMMS FAILED: {exc}", "error")
+        return None
+
+
+def api_insights() -> dict | None:
+    try:
+        r = requests.get(
+            f"{API_URL}/insights",
+            headers=_request_headers(),
+            timeout=15,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
         return None
 
 
@@ -405,6 +467,32 @@ with col_main:
         with m4: metric_card("COLLISION PROB", "—")
         with m5: metric_card("STATUS", "IDLE")
 
+    # Why/what transparency block for judges and post-mission analysis
+    if rd:
+        st.markdown('<div class="section-label">WHY THIS ALERT EXISTS</div>', unsafe_allow_html=True)
+        why_col1, why_col2, why_col3 = st.columns(3)
+        with why_col1:
+            st.caption("Collision Model Input")
+            st.code(
+                f"distance_to_debris_km={rd.get('distance_to_debris_km', 'N/A')}\n"
+                f"collision_probability={rd.get('collision_probability', 'N/A')}",
+                language="text",
+            )
+        with why_col2:
+            st.caption("Scenario Properties")
+            st.code(
+                f"scenario_mode={rd.get('scenario_mode', 'N/A')}\n"
+                f"data_source={rd.get('data_source', 'N/A')}",
+                language="text",
+            )
+        with why_col3:
+            st.caption("Operational Context")
+            st.code(
+                f"altitude_km={rd.get('altitude_km', 'N/A')}\n"
+                f"status={rd.get('status', 'N/A')}",
+                language="text",
+            )
+
     # ── Control buttons ───────────────────────────────────────────────
     st.markdown('<div class="section-label">COMMAND INTERFACE</div>',
                 unsafe_allow_html=True)
@@ -435,6 +523,51 @@ with col_log:
         f"BACKEND: {API_URL}</div>",
         unsafe_allow_html=True,
     )
+
+    # Autonomous learning panel (uses backend /insights)
+    insights_data = api_insights()
+    if insights_data and insights_data.get("status") == "ok":
+        insights = insights_data.get("insights", {})
+        summary = insights.get("summary", {})
+        latency = insights.get("latency_ms", {})
+        hotspots = insights.get("failure_hotspots", {})
+        recs = insights.get("recommendations", [])
+
+        st.markdown('<div class="section-label">AUTONOMOUS LEARNING PANEL</div>',
+                    unsafe_allow_html=True)
+        st.caption("Real-time learning from runtime traces, failures, and retries")
+
+        p1, p2 = st.columns(2)
+        with p1:
+            st.metric("Success Rate", f"{summary.get('execution_success_rate', 0.0)}%")
+            st.metric("Blocked Attempts", summary.get("blocked_attempts", 0))
+        with p2:
+            st.metric("Avg Scan Latency", f"{latency.get('scan_avg', 0.0)} ms")
+            st.metric("Avg Act Latency", f"{latency.get('act_avg', 0.0)} ms")
+
+        tags = hotspots.get("violation_tags", {})
+        if tags:
+            df_tags = pd.DataFrame({
+                "violation_tag": list(tags.keys()),
+                "count": list(tags.values()),
+            })
+            fig_tags = px.bar(
+                df_tags,
+                x="violation_tag",
+                y="count",
+                title="Policy Violation Frequency",
+                color="count",
+                color_continuous_scale="reds",
+            )
+            fig_tags.update_layout(height=220, margin=dict(l=10, r=10, t=35, b=10))
+            st.plotly_chart(fig_tags, use_container_width=True)
+
+        with st.expander("Improvement Suggestions", expanded=True):
+            for rec in recs:
+                st.markdown(f"- {rec}")
+
+        with st.expander("Recent Runtime Events", expanded=False):
+            st.json(insights.get("recent_events", []))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -535,6 +668,13 @@ if triggered:
                             unsafe_allow_html=True,
                         )
                         add_log("   ↳ Commander self-correcting (feedback loop)...", "warn")
+
+                for wf in act_data.get("workflow_trace", []):
+                    st.caption(
+                        "Attempt "
+                        f"{wf.get('attempt')} | latency={wf.get('attempt_latency_ms')} ms | "
+                        f"validator={wf.get('validation_source')}"
+                    )
 
         # ── Result banner ─────────────────────────────────────────────
         if act_data.get("status") == "EXECUTED":

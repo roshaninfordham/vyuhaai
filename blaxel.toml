@@ -8,6 +8,7 @@
 name = "vyuha-ai"
 workspace = "rs"
 type = "agent"
+public = true
 
 # LLM backing the Commander decision engine
 models = ["sandbox-openai"]
@@ -26,6 +27,9 @@ timeout = 900          # 15 min max per invocation
 memory = 4096          # MB
 generation = "mk3"     # Blaxel runtime generation
 
+[entrypoint]
+prod = "python -m agent.src.main"
+
 # ---------------------------------------------------------------------------
 # HTTP triggers — sync for real-time queries, async for long-running maneuvers
 # ---------------------------------------------------------------------------
@@ -33,6 +37,7 @@ generation = "mk3"     # Blaxel runtime generation
 [[triggers]]
 id = "vyuha-scan"
 type = "http"
+enabled = true
 [triggers.configuration]
 path = "agents/vyuha-ai/scan"
 authenticationType = "private"
@@ -40,6 +45,7 @@ authenticationType = "private"
 [[triggers]]
 id = "vyuha-act"
 type = "http"
+enabled = true
 [triggers.configuration]
 path = "agents/vyuha-ai/act"
 authenticationType = "private"
@@ -47,6 +53,7 @@ authenticationType = "private"
 [[triggers]]
 id = "vyuha-maneuver-async"
 type = "http-async"
+enabled = true
 [triggers.configuration]
 path = "agents/vyuha-ai/maneuver"
 retry = 3
