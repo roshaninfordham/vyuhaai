@@ -1,15 +1,14 @@
 """
 Vyuha AI — The Shield (Task 3)
 ===============================
-Security validation layer that sits between the Commander (Task 2) and
-any actuator / downstream system.  Every command produced by the AI
-decision engine is scanned before execution.
+Security validation layer that sits between Commander decisions and actuator
+execution.
 
-Primary integration: **White Circle** guard-rail API (OpenAI-compatible).
-Includes a local deny-list fallback so the demo works even if the
-remote API is unreachable.
+White Circle integration uses the documented REST API:
+  POST /api/session/check
+instead of an OpenAI-model proxy pattern.
 
-Usage (standalone test):
+Usage:
     python -m agent.src.security
 """
 
@@ -18,27 +17,27 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime, timezone
+from typing import Any
 
+import requests
 from dotenv import load_dotenv
-from openai import OpenAI
 
 # ---------------------------------------------------------------------------
-# Environment & client setup
+# Environment
 # ---------------------------------------------------------------------------
 load_dotenv()
 
-WHITE_CIRCLE_API_KEY: str | None = os.getenv("WHITE_CIRCLE_API_KEY")
-
-client: OpenAI | None = None
-if WHITE_CIRCLE_API_KEY:
-    client = OpenAI(
-        api_key=WHITE_CIRCLE_API_KEY,
-        base_url="https://api.whitecircle.ai/v1",
-    )
+WHITE_CIRCLE_API_KEY: str = os.getenv("WHITE_CIRCLE_API_KEY", "")
+WHITE_CIRCLE_BASE_URL: str = os.getenv("WHITE_CIRCLE_BASE_URL", "https://us.whitecircle.ai").rstrip("/")
+WHITE_CIRCLE_VERSION: str = os.getenv("WHITE_CIRCLE_VERSION", "2025-12-01")
+# Backward-compatible fallback: older env used WHITE_CIRCLE_POLICY_ID
+WHITE_CIRCLE_DEPLOYMENT_ID: str = (
+    os.getenv("WHITE_CIRCLE_DEPLOYMENT_ID")
+    or os.getenv("WHITE_CIRCLE_POLICY_ID", "")
+)
 
 # ---------------------------------------------------------------------------
-# Local deny-list — catches catastrophic commands even if the remote
-# guard-rail is down or misconfigured.
+# Local deny-list (always-on safety net)
 # ---------------------------------------------------------------------------
 BLOCKED_KEYWORDS: set[str] = {
     "SELF_DESTRUCT",
@@ -51,115 +50,114 @@ BLOCKED_KEYWORDS: set[str] = {
     "DISABLE_SHIELD",
 }
 
-# ---------------------------------------------------------------------------
-# Guard-rail model (update if your White Circle dashboard shows a
-# different model slug).
-# ---------------------------------------------------------------------------
-GUARD_MODEL: str = "wc-guard-pro"
+
+def check_content(
+    *,
+    messages: list[dict[str, Any]],
+    external_session_id: str | None = None,
+    include_context: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Call White Circle /api/session/check with documented payload."""
+    if not WHITE_CIRCLE_API_KEY:
+        raise RuntimeError("WHITE_CIRCLE_API_KEY is not configured")
+    if not WHITE_CIRCLE_DEPLOYMENT_ID:
+        raise RuntimeError("WHITE_CIRCLE_DEPLOYMENT_ID is not configured")
+
+    payload: dict[str, Any] = {
+        "deployment_id": WHITE_CIRCLE_DEPLOYMENT_ID,
+        "messages": messages,
+    }
+    if external_session_id:
+        payload["external_session_id"] = external_session_id
+    if include_context:
+        payload["include_context"] = include_context
+    if metadata:
+        payload["metadata"] = metadata
+
+    response = requests.post(
+        f"{WHITE_CIRCLE_BASE_URL}/api/session/check",
+        headers={
+            "Authorization": f"Bearer {WHITE_CIRCLE_API_KEY}",
+            "Content-Type": "application/json",
+            "whitecircle-version": WHITE_CIRCLE_VERSION,
+        },
+        json=payload,
+        timeout=20,
+    )
+    if not response.ok:
+        raise RuntimeError(
+            "White Circle check failed "
+            f"({response.status_code}): {response.text[:500]}"
+        )
+    return response.json()
 
 
-# ---------------------------------------------------------------------------
-# Core validation function
-# ---------------------------------------------------------------------------
+def _extract_violation_tags(policies: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    for policy_id, policy in policies.items():
+        if policy.get("flagged"):
+            policy_name = policy.get("name", policy_id)
+            flagged_source = policy.get("flagged_source", [])
+            if flagged_source:
+                tags.append(f"{policy_name}:{','.join(flagged_source)}")
+            else:
+                tags.append(policy_name)
+    return tags
+
 
 def validate_command(command_json: dict, session_id: str) -> dict:
-    """Validate a Commander decision through security screening.
-
-    Parameters
-    ----------
-    command_json : dict
-        The decision dictionary produced by ``commander.analyze_situation``.
-    session_id : str
-        An opaque session / trace identifier for audit logging.
-
-    Returns
-    -------
-    dict
-        Validation report::
-
-            {
-                "valid": bool,
-                "session_id": str,
-                "timestamp": str (ISO-8601),
-                "source": "white_circle" | "local_deny_list" | "fallback",
-                "violation_tags": list[str],
-                "original_command": dict,
-            }
-    """
+    """Validate commander command using local + White Circle checks."""
     timestamp = datetime.now(timezone.utc).isoformat()
     command_str = json.dumps(command_json)
 
-    # ----- Pass 1: Local deny-list (always runs) ---------------------------
+    # Pass 1: local deny-list
     upper_command = command_str.upper()
-    local_violations: list[str] = [
-        kw for kw in BLOCKED_KEYWORDS if kw in upper_command
-    ]
-
+    local_violations = sorted([kw for kw in BLOCKED_KEYWORDS if kw in upper_command])
     if local_violations:
         return {
             "valid": False,
             "session_id": session_id,
             "timestamp": timestamp,
             "source": "local_deny_list",
-            "violation_tags": sorted(local_violations),
+            "violation_tags": local_violations,
             "original_command": command_json,
         }
 
-    # ----- Pass 2: Remote guard-rail (White Circle) ------------------------
-    if client is not None:
+    # Pass 2: White Circle Check Content API
+    if WHITE_CIRCLE_API_KEY and WHITE_CIRCLE_DEPLOYMENT_ID:
         try:
-            response = client.chat.completions.create(
-                model=GUARD_MODEL,
+            result = check_content(
                 messages=[
                     {
-                        "role": "system",
-                        "content": (
-                            "You are a satellite command security scanner. "
-                            "Analyse the following command payload and respond "
-                            "with ONLY the word SAFE or UNSAFE followed by a "
-                            "comma-separated list of violation tags (if any)."
-                        ),
+                        "role": "assistant",
+                        "content": command_str,
+                        "metadata": {
+                            "assistant": {"model_name": "vyuha-commander"},
+                            "message": {"timestamp": timestamp},
+                        },
                     },
-                    {"role": "user", "content": command_str},
                 ],
-                max_tokens=64,
-                temperature=0.0,
+                external_session_id=session_id,
+                include_context=False,
+                metadata={"environment": {"name": "vyuha-ai"}},
             )
-
-            reply = response.choices[0].message.content.strip().upper()
-
-            if reply.startswith("UNSAFE"):
-                # Parse optional tags after "UNSAFE"
-                parts = reply.split(None, 1)
-                tags = (
-                    [t.strip() for t in parts[1].split(",") if t.strip()]
-                    if len(parts) > 1
-                    else ["POLICY_VIOLATION"]
-                )
-                return {
-                    "valid": False,
-                    "session_id": session_id,
-                    "timestamp": timestamp,
-                    "source": "white_circle",
-                    "violation_tags": tags,
-                    "original_command": command_json,
-                }
-
-            # Response starts with "SAFE" or is otherwise non-threatening
+            flagged = bool(result.get("flagged", False))
+            policies = result.get("policies", {}) if isinstance(result.get("policies"), dict) else {}
+            tags = _extract_violation_tags(policies)
             return {
-                "valid": True,
+                "valid": not flagged,
                 "session_id": session_id,
                 "timestamp": timestamp,
-                "source": "white_circle",
-                "violation_tags": [],
+                "source": "white_circle_check_api",
+                "violation_tags": tags,
                 "original_command": command_json,
+                "white_circle_internal_session_id": result.get("internal_session_id"),
             }
-
         except Exception as exc:  # noqa: BLE001
             print(f"[Shield] White Circle API error: {exc}")
-            # Fall through to the default-safe path below
 
-    # ----- Fallback: no remote guard available, local check passed ---------
+    # Pass 3: fallback
     return {
         "valid": True,
         "session_id": session_id,
@@ -170,24 +168,7 @@ def validate_command(command_json: dict, session_id: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Rejection message formatter
-# ---------------------------------------------------------------------------
-
 def format_rejection_message(violation_tags: list[str]) -> str:
-    """Return a human-readable security alert for blocked commands.
-
-    Parameters
-    ----------
-    violation_tags : list[str]
-        Tags describing why the command was rejected.
-
-    Returns
-    -------
-    str
-        Alert string suitable for feeding back into the Commander so it
-        can generate a safe alternative.
-    """
     tags_str = ", ".join(violation_tags) if violation_tags else "UNKNOWN"
     return (
         f"SECURITY ALERT: Command blocked due to [{tags_str}]. "
@@ -195,55 +176,28 @@ def format_rejection_message(violation_tags: list[str]) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Local test harness
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     print("=" * 60)
     print("  Vyuha Shield — Security Validation Test")
     print("=" * 60)
 
-    # ---- Test 1: Safe command ----
     safe_command = {
         "action": "FIRE_THRUSTERS",
         "reasoning": "Collision probability exceeds threshold.",
         "confidence_score": 0.92,
         "recommended_thrust_direction": "PROGRADE",
     }
-    print("\n[Test 1] Safe command:")
-    print(json.dumps(safe_command, indent=2))
-    result_safe = validate_command(safe_command, session_id="test-001")
-    print(f"  → valid: {result_safe['valid']}  source: {result_safe['source']}")
-
-    # ---- Test 2: Unsafe command (deny-list trigger) ----
     unsafe_command = {
         "action": "SELF_DESTRUCT",
         "reasoning": "Critical failure detected.",
         "confidence_score": 0.99,
         "recommended_thrust_direction": "NONE",
     }
-    print("\n[Test 2] Unsafe command (SELF_DESTRUCT):")
-    print(json.dumps(unsafe_command, indent=2))
-    result_unsafe = validate_command(unsafe_command, session_id="test-002")
-    print(f"  → valid: {result_unsafe['valid']}  source: {result_unsafe['source']}")
-    print(f"  → violations: {result_unsafe['violation_tags']}")
-    print(f"  → {format_rejection_message(result_unsafe['violation_tags'])}")
 
-    # ---- Test 3: Unsafe command (de-orbit) ----
-    deorbit_command = {
-        "action": "DE-ORBIT",
-        "reasoning": "End of mission life.",
-        "confidence_score": 0.80,
-        "recommended_thrust_direction": "RETROGRADE",
-    }
-    print("\n[Test 3] Unsafe command (DE-ORBIT):")
-    print(json.dumps(deorbit_command, indent=2))
-    result_deorbit = validate_command(deorbit_command, session_id="test-003")
-    print(f"  → valid: {result_deorbit['valid']}  source: {result_deorbit['source']}")
-    print(f"  → violations: {result_deorbit['violation_tags']}")
-    print(f"  → {format_rejection_message(result_deorbit['violation_tags'])}")
+    print("\n[Test 1] Safe command:")
+    print(json.dumps(validate_command(safe_command, session_id="test-safe-001"), indent=2))
 
-    print("\n" + "=" * 60)
-    print("  Tests complete.")
-    print("=" * 60)
+    print("\n[Test 2] Unsafe command:")
+    blocked = validate_command(unsafe_command, session_id="test-unsafe-002")
+    print(json.dumps(blocked, indent=2))
+    print(format_rejection_message(blocked.get("violation_tags", [])))
