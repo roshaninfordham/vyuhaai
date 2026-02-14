@@ -4,8 +4,15 @@ Vyuha AI — The Commander (Task 2)
 Decision-making brain for the autonomous satellite defense system.
 
 Receives telemetry / conjunction-risk data from the Orbit Engine (Task 1)
-and uses an LLM via Blaxel AI's model gateway to decide whether to hold
+and uses an LLM via **Blaxel AI's** model gateway to decide whether to hold
 position or execute an avoidance maneuver.
+
+Two execution paths (selected automatically):
+  1. **Blaxel SDK** (``BLModel``) — preferred when ``blaxel`` is installed
+     and ``BL_WORKSPACE`` is configured.  Gives automatic telemetry,
+     token refresh, and deployment compatibility.
+  2. **Direct OpenAI client** — fallback that uses ``httpx`` to inject
+     Blaxel's non-standard auth headers manually.
 
 Usage (standalone test):
     python -m agent.src.commander
@@ -13,9 +20,12 @@ Usage (standalone test):
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
+import time
 
 import httpx
 from dotenv import load_dotenv
@@ -26,24 +36,39 @@ from openai import OpenAI
 # ---------------------------------------------------------------------------
 load_dotenv()
 
+logger = logging.getLogger("vyuha.commander")
+
 BLAXEL_API_KEY: str = os.getenv("BLAXEL_API_KEY", "")
 BLAXEL_WORKSPACE: str = os.getenv("BLAXEL_WORKSPACE", "rs")
+BLAXEL_MODEL_NAME: str = os.getenv("BLAXEL_MODEL_NAME", "sandbox-openai")
 BLAXEL_MODEL_BASE_URL: str = (
-    f"https://run.blaxel.ai/{BLAXEL_WORKSPACE}/models/sandbox-openai/v1"
+    f"https://run.blaxel.ai/{BLAXEL_WORKSPACE}/models/{BLAXEL_MODEL_NAME}/v1"
 )
 
-# The OpenAI SDK appends /chat/completions to base_url automatically.
-# Blaxel requires X-Blaxel-Authorization (not standard Authorization) and
-# X-Blaxel-Workspace headers, so we inject them via a custom httpx client.
+# ---------------------------------------------------------------------------
+# Path 1 — Blaxel SDK (preferred)
+# ---------------------------------------------------------------------------
+_bl_model = None
+try:
+    from blaxel.core.models import BLModel
+    _bl_model = BLModel(BLAXEL_MODEL_NAME)
+    logger.info("Blaxel SDK BLModel initialised for '%s'", BLAXEL_MODEL_NAME)
+except Exception:
+    logger.info("Blaxel SDK unavailable — using direct OpenAI client fallback")
+
+# ---------------------------------------------------------------------------
+# Path 2 — Direct OpenAI client via custom httpx (fallback)
+# ---------------------------------------------------------------------------
 _http_client = httpx.Client(
     headers={
         "X-Blaxel-Authorization": f"Bearer {BLAXEL_API_KEY}",
         "X-Blaxel-Workspace": BLAXEL_WORKSPACE,
     },
+    timeout=30.0,
 )
 
-client = OpenAI(
-    api_key=BLAXEL_API_KEY,          # SDK still wants a non-empty string
+_openai_client = OpenAI(
+    api_key=BLAXEL_API_KEY,
     base_url=BLAXEL_MODEL_BASE_URL,
     http_client=_http_client,
 )
@@ -82,6 +107,55 @@ SAFETY_FALLBACK: dict = {
     "confidence_score": 0.0,
     "recommended_thrust_direction": "NONE",
 }
+
+
+# ---------------------------------------------------------------------------
+# Internal: call LLM via the best available path
+# ---------------------------------------------------------------------------
+
+async def _call_llm_async(messages: list[dict]) -> str:
+    """Call the Blaxel-hosted LLM asynchronously via the SDK."""
+    if _bl_model is None:
+        raise RuntimeError("BLModel not available")
+
+    url, _type, model = await _bl_model.get_parameters()
+
+    # Build an async OpenAI client pointing at the resolved URL
+    async_http = httpx.AsyncClient(
+        headers={
+            "X-Blaxel-Authorization": f"Bearer {BLAXEL_API_KEY}",
+            "X-Blaxel-Workspace": BLAXEL_WORKSPACE,
+        },
+        timeout=30.0,
+    )
+    from openai import AsyncOpenAI
+    async_client = AsyncOpenAI(
+        api_key=BLAXEL_API_KEY,
+        base_url=f"{url}/v1",
+        http_client=async_http,
+    )
+    try:
+        response = await async_client.chat.completions.create(
+            model=model or "gpt-4o-mini",
+            messages=messages,
+            temperature=0.2,
+            max_tokens=256,
+        )
+        return response.choices[0].message.content
+    finally:
+        await async_http.aclose()
+
+
+def _call_llm_sync(messages: list[dict]) -> str:
+    """Call the Blaxel-hosted LLM synchronously via the direct OpenAI client."""
+    response = _openai_client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        temperature=0.2,
+        max_tokens=256,
+        timeout=30,
+    )
+    return response.choices[0].message.content
 
 
 # ---------------------------------------------------------------------------
@@ -131,19 +205,25 @@ def analyze_situation(
             f"You must generate a NEW plan that avoids this specific violation."
         )
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0.2,
-            max_tokens=256,
-            timeout=30,
-        )
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
-        raw_text = response.choices[0].message.content.strip()
+    start = time.perf_counter()
+
+    try:
+        # Prefer async SDK path; fall back to sync direct client
+        try:
+            raw_text = asyncio.get_event_loop().run_until_complete(
+                _call_llm_async(messages),
+            )
+        except (RuntimeError, Exception):
+            # Either no event loop, BLModel unavailable, or SDK error
+            raw_text = _call_llm_sync(messages)
+
+        elapsed = round((time.perf_counter() - start) * 1000)
+        raw_text = raw_text.strip()
 
         # -- Strip Markdown fences if the model wraps its output -------------
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
@@ -160,17 +240,24 @@ def analyze_situation(
             "recommended_thrust_direction",
         }
         if not required_keys.issubset(decision.keys()):
-            print(f"[Commander] Missing keys in response: "
-                  f"{required_keys - decision.keys()}")
+            logger.warning(
+                "Missing keys in response: %s", required_keys - decision.keys(),
+            )
             return SAFETY_FALLBACK.copy()
 
+        logger.info(
+            "Decision: %s (confidence=%.2f) in %d ms",
+            decision["action"],
+            decision.get("confidence_score", 0),
+            elapsed,
+        )
         return decision
 
     except (json.JSONDecodeError, ValueError) as exc:
-        print(f"[Commander] JSON parse error: {exc}")
+        logger.error("JSON parse error: %s", exc)
         return SAFETY_FALLBACK.copy()
     except Exception as exc:  # noqa: BLE001
-        print(f"[Commander] LLM API error: {exc}")
+        logger.error("LLM API error: %s", exc)
         return SAFETY_FALLBACK.copy()
 
 
@@ -179,6 +266,8 @@ def analyze_situation(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+
     dummy_risk = {
         "collision_probability": 0.95,
         "altitude_km": 400,

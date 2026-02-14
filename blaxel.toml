@@ -1,0 +1,52 @@
+# ==========================================================================
+# Vyuha AI — Blaxel Deployment Manifest
+# ==========================================================================
+# Deploy:  bl deploy
+# Run:     bl run agent vyuha-ai --data '{"inputs":"Scan ISS for collision risks"}'
+# Logs:    bl logs agent vyuha-ai
+
+name = "vyuha-ai"
+workspace = "rs"
+type = "agent"
+
+# LLM backing the Commander decision engine
+models = ["sandbox-openai"]
+
+# MCP tool-servers the agent can invoke
+functions = ["vyuha-orbital-tools"]
+
+[env]
+SPACECRAFT_MODE = "autonomous"
+COLLISION_THRESHOLD = "0.7"
+MAX_RETRIES = "3"
+ISS_TLE_SOURCE = "celestrak"
+
+[runtime]
+timeout = 900          # 15 min max per invocation
+memory = 4096          # MB
+generation = "mk3"     # Blaxel runtime generation
+
+# ---------------------------------------------------------------------------
+# HTTP triggers — sync for real-time queries, async for long-running maneuvers
+# ---------------------------------------------------------------------------
+
+[[triggers]]
+id = "vyuha-scan"
+type = "http"
+[triggers.configuration]
+path = "agents/vyuha-ai/scan"
+authenticationType = "private"
+
+[[triggers]]
+id = "vyuha-act"
+type = "http"
+[triggers.configuration]
+path = "agents/vyuha-ai/act"
+authenticationType = "private"
+
+[[triggers]]
+id = "vyuha-maneuver-async"
+type = "http-async"
+[triggers.configuration]
+path = "agents/vyuha-ai/maneuver"
+retry = 3
