@@ -171,20 +171,34 @@ async def health_check():
 # ---------------------------------------------------------------------------
 
 @app.post("/scan")
-async def scan_satellite(request: RiskAnalysisRequest):
+async def scan_satellite(
+    request: RiskAnalysisRequest,
+    simulate_danger: bool = False,
+):
     """Propagate the satellite orbit and return conjunction-risk data.
 
     Fetches the latest ISS (ZARYA) TLE from CelesTrak in real time.
     Falls back to a hardcoded TLE if the network is unavailable.
+
+    Query Parameters
+    ----------------
+    simulate_danger : bool
+        When ``True``, forces a CRITICAL collision scenario while keeping
+        the real satellite position (Hybrid Demo Mode).
     """
     try:
-        # No args → auto-fetches live TLE from CelesTrak
-        risk_data = await asyncio.to_thread(check_conjunction_risk)
+        risk_data = await asyncio.to_thread(
+            check_conjunction_risk,
+            "",                       # auto-fetch TLE
+            "",                       # auto-fetch TLE
+            simulate_danger,          # force_critical flag
+        )
         logger.info(
-            "Scan complete for %s — prob=%.4f status=%s source=%s",
+            "Scan complete for %s — prob=%.4f status=%s mode=%s source=%s",
             request.satellite_id,
             risk_data.get("collision_probability", -1),
             risk_data.get("status", "?"),
+            risk_data.get("scenario_mode", "?"),
             risk_data.get("data_source", "?"),
         )
         return {

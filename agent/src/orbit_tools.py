@@ -137,6 +137,7 @@ def _simulate_debris_encounter(seed: int) -> tuple[float, float]:
 def check_conjunction_risk(
     satellite_tle_line1: str = "",
     satellite_tle_line2: str = "",
+    force_critical: bool = False,
 ) -> dict:
     """Propagate a satellite TLE to the current epoch and assess conjunction
     risk against a simulated debris catalogue.
@@ -150,6 +151,11 @@ def check_conjunction_risk(
         First line of the two-line element set (TLE).
     satellite_tle_line2 : str, optional
         Second line of the two-line element set (TLE).
+    force_critical : bool, optional
+        **Hybrid Demo Mode** — when ``True``, the real satellite position is
+        kept but collision probability is overridden to 0.95 and distance to
+        debris to 0.5 km, guaranteeing a CRITICAL status.  The response is
+        tagged with ``scenario_mode="SYNTHETIC_DEBRIS_INJECTION"``.
 
     Returns
     -------
@@ -186,22 +192,31 @@ def check_conjunction_risk(
     longitude = round(subpoint.longitude.degrees, 6)
     altitude_km = round(subpoint.elevation.km, 3)
 
-    # --- Simulated debris encounter ----------------------------------------
+    # --- Debris encounter --------------------------------------------------
     utc_now = datetime.now(timezone.utc)
-    seed = _deterministic_seed(
-        satellite_tle_line1, satellite_tle_line2, utc_now.minute,
-    )
-    collision_probability, distance_to_debris_km = _simulate_debris_encounter(seed)
 
-    # --- Status classification ---------------------------------------------
-    if collision_probability > 0.7:
+    if force_critical:
+        # Synthetic debris injection — position is REAL, threat is FORCED
+        collision_probability = 0.95
+        distance_to_debris_km = 0.5
         status = "CRITICAL"
-    elif collision_probability > 0.4:
-        status = "WARNING"
+        scenario_mode = "SYNTHETIC_DEBRIS_INJECTION"
+        logger.info("Force-critical mode: injecting synthetic debris threat")
     else:
-        status = "SAFE"
+        seed = _deterministic_seed(
+            satellite_tle_line1, satellite_tle_line2, utc_now.minute,
+        )
+        collision_probability, distance_to_debris_km = _simulate_debris_encounter(seed)
+        scenario_mode = "LIVE_OBSERVATION"
 
-    return {
+        if collision_probability > 0.7:
+            status = "CRITICAL"
+        elif collision_probability > 0.4:
+            status = "WARNING"
+        else:
+            status = "SAFE"
+
+    result: dict = {
         "timestamp": utc_now.isoformat(),
         "latitude": latitude,
         "longitude": longitude,
@@ -209,8 +224,11 @@ def check_conjunction_risk(
         "distance_to_debris_km": distance_to_debris_km,
         "collision_probability": collision_probability,
         "status": status,
+        "scenario_mode": scenario_mode,
         "data_source": f"{data_source} (Live Fetch: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')})",
     }
+
+    return result
 
 
 # ---------------------------------------------------------------------------
