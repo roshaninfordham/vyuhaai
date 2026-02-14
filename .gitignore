@@ -29,3 +29,6 @@ de421.bsp
 # OS
 .DS_Store
 Thumbs.db
+
+# Runtime telemetry / learning artifacts
+agent/data/*.jsonl
