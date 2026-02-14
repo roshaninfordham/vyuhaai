@@ -1,45 +1,43 @@
 # Vyuha AI - Autonomous Orbital Defense System
 
-Production-oriented autonomous space safety system that combines:
-- live ISS telemetry ingestion (CelesTrak),
-- AI mission decisions (Blaxel-hosted model),
-- security guardrails (White Circle + local deny-list),
-- transparent mission operations dashboard (Streamlit),
-- runtime learning and failure analytics (`/insights`).
+Vyuha AI is a production-oriented autonomous space safety platform that monitors orbital risk, recommends maneuvers, validates safety policy, and learns from failures over time.
+
+It is built for transparent operations: every step from telemetry ingestion to AI action validation is observable in real time.
 
 ---
 
-## Homepage / Quick Start
+## Why This Exists
 
-### 1) Local demo run
+Satellites face conjunction risk, but mission teams often lack a fast, explainable, and secure autonomous loop that can:
+- ingest real orbital data,
+- reason over risk quickly,
+- enforce security policy before execution,
+- and continuously improve from runtime behavior.
 
-```bash
-# Backend
-source .venv/bin/activate
-python -m agent.src.main
-
-# Dashboard (separate terminal)
-source .venv/bin/activate
-streamlit run dashboard/app.py --server.port 8501
-```
-
-- Backend homepage: `http://localhost:8000/`
-- API docs: `http://localhost:8000/docs`
-- Dashboard: `http://localhost:8501`
-
-### 2) Cloud deployment (Blaxel)
-
-```bash
-bl login rs
-bl deploy
-```
-
-Current deployed public URL:
-- `https://agt-vyuha-ai-w18o89.bl.run`
+Vyuha AI solves this by combining Blaxel model infrastructure, White Circle security guardrails, and a transparent control dashboard.
 
 ---
 
-## System Design Architecture
+## Core Capabilities
+
+- **Live orbital ingestion**
+  - Pulls real-time ISS TLE data from CelesTrak.
+- **Hybrid demo mode**
+  - Runs real telemetry while allowing forced critical scenarios for deterministic demonstrations.
+- **Autonomous decision loop**
+  - Commander model decides `FIRE_THRUSTERS` vs `HOLD_POSITION` using strict JSON output.
+- **Security validation**
+  - White Circle validation + local deny-list fallback for resilient safety checks.
+- **Self-correction loop**
+  - If a command is blocked, rejection feedback is fed back to the model for safer retry.
+- **Learning and observability**
+  - Persistent event logs + `/insights` analytics (latency, failures, hotspot tags, recommendations).
+- **Mission command center UI**
+  - Streamlit + Plotly interface with chain-of-thought visualization and learning panel.
+
+---
+
+## System Architecture
 
 ```mermaid
 flowchart TD
@@ -59,7 +57,7 @@ flowchart TD
     E --> K
 ```
 
-### End-to-end request flow
+### Request Flow (Data to Action)
 
 ```mermaid
 sequenceDiagram
@@ -93,35 +91,74 @@ sequenceDiagram
 
 ---
 
-## What is transparent in real time
+## Tech Stack
 
-- **Operational**: telemetry, status, collision probability, data source.
-- **Agentic reasoning**: action + one-sentence rationale + confidence.
-- **Guardrail decisions**: pass/fail source and violation tags.
-- **Performance**: scan latency, act latency, request-level timings.
-- **Learning**: persistent events, hotspots, recommendations, recent events.
+- **Backend API**: FastAPI, Pydantic, Uvicorn
+- **Orbital mechanics**: Skyfield, NumPy, CelesTrak feed
+- **AI decisions**: Blaxel + OpenAI-compatible client path
+- **Security guardrails**: White Circle AI + local deny-list fallback
+- **Frontend**: Streamlit + Plotly
+- **Learning/telemetry**: JSONL event store + analytics endpoint (`/insights`)
+- **Deployment**: Blaxel (`blaxel.toml`)
 
 ---
 
-## Real Results So Far (Observed)
+## Quick Start
 
-### Live telemetry (non-forced)
+### Local
 
-Observed sample:
+```bash
+# Backend
+source .venv/bin/activate
+python -m agent.src.main
+
+# Dashboard (new terminal)
+source .venv/bin/activate
+streamlit run dashboard/app.py --server.port 8501
+```
+
+- Backend homepage: `http://localhost:8000/`
+- OpenAPI docs: `http://localhost:8000/docs`
+- Dashboard: `http://localhost:8501`
+
+### Blaxel Deploy
+
+```bash
+bl login rs
+bl deploy
+```
+
+Deployed public endpoint:
+- `https://agt-vyuha-ai-w18o89.bl.run`
+
+---
+
+## API Endpoints
+
+- `GET /` - service status + endpoint index
+- `GET /health` - health and telemetry readiness
+- `POST /scan` - live or simulated conjunction scan
+- `POST /act` - autonomous commander + shield loop
+- `GET /insights` - runtime analytics and recommendations
+- `GET /docs` - OpenAPI UI
+
+---
+
+## Verified Outputs (Real + Simulated)
+
+### 1) Real telemetry mode
 
 ```json
 {
   "status": "SAFE",
   "collision_probability": 0.1112,
   "distance_to_debris_km": 43.788,
-  "data_source": "CelesTrak (Live) (...)",
-  "scenario_mode": "LIVE_OBSERVATION"
+  "scenario_mode": "LIVE_OBSERVATION",
+  "data_source": "CelesTrak (Live) (...)"
 }
 ```
 
-### Simulated critical scenario (forced danger)
-
-Observed sample:
+### 2) Simulated critical mode
 
 ```json
 {
@@ -133,9 +170,7 @@ Observed sample:
 }
 ```
 
-### Agent execution outcome
-
-Observed sample:
+### 3) Autonomous act result
 
 ```json
 {
@@ -149,9 +184,7 @@ Observed sample:
 }
 ```
 
-### Insights output sample
-
-Observed sample:
+### 4) Insights (learning analytics)
 
 ```json
 {
@@ -167,38 +200,48 @@ Observed sample:
 
 ---
 
-## Problems Faced and Fixes
+## Problems Faced and How They Were Solved
 
-- **Blaxel deployment crash**: `Argument expected for the -m option`
-  - Fix: explicit entrypoint in `blaxel.toml`:
-    - `[entrypoint] prod = "python -m agent.src.main"`
-- **Browser showed backend not working**
-  - Root cause: `GET /` returned 404.
-  - Fix: added root endpoint in FastAPI returning service status + endpoint list.
-- **Port conflicts on local demo (`:8000`)**
-  - Fix: terminate stale processes and restart cleanly.
-- **Guardrail API instability**
-  - White Circle occasionally falls back to local deny-list path.
-  - Captured in `/insights` with recommendations.
-
----
-
-## Security and Safe Operations
-
-- `.env` is git-ignored; never commit real keys.
-- API keys loaded via `python-dotenv`.
-- White Circle + local deny-list blocks unsafe commands.
-- Production-safe defaults:
-  - bounded retries (`MAX_RETRIES`),
-  - fallback safety posture (`HOLD_POSITION` on AI errors),
-  - structured runtime logging.
+- **Blaxel startup failure**: `Argument expected for the -m option`
+  - Added explicit entrypoint in `blaxel.toml`:
+  - `[entrypoint] prod = "python -m agent.src.main"`
+- **Backend looked down in browser**
+  - Browser hit `/` while API only exposed `/health` initially.
+  - Added root endpoint (`GET /`) for operator-friendly status page.
+- **Port collisions in local demo**
+  - Stale Uvicorn processes on `:8000`.
+  - Added clean restart/kill procedure.
+- **External guardrail instability**
+  - White Circle occasionally unavailable.
+  - Fallback path recorded in `/insights` with remediation recommendations.
 
 ---
 
-## Repo Documentation Index
+## Production Readiness Notes
+
+- Secrets are environment-based (`.env` is git-ignored).
+- Runtime-generated logs (`agent/data/*.jsonl`) are excluded from git.
+- Bounded retries and safety fallback responses prevent unsafe escalation.
+- Structured logging + telemetry support post-mortem and performance tuning.
+- Blaxel deployment manifest includes runtime tuning, triggers, and entrypoint.
+
+---
+
+## Future Roadmap
+
+- Multi-satellite live ingestion beyond ISS (catalog-level monitoring).
+- Probability model calibration using historical conjunction datasets.
+- Automated policy tuning from recurring violation patterns.
+- Canary release workflow for prompt/model updates.
+- Alerting integrations (Slack/PagerDuty/email) for critical conjunction events.
+- Signed command ledger for audit-grade compliance.
+
+---
+
+## Documentation Index
 
 - `agent/README.md` - backend subsystem overview
-- `agent/src/README.md` - module-by-module engineering details
+- `agent/src/README.md` - module-level engineering details
 - `agent/data/README.md` - runtime learning data model
-- `dashboard/README.md` - mission control UI behavior and demo guidance
+- `dashboard/README.md` - command center UX and demo operation
 

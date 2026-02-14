@@ -171,10 +171,9 @@ async def health_check():
 @app.get("/")
 async def root():
     return {
-        "service": "vyuha-ai",
-        "status": "online",
-        "message": "Vyuha AI backend is running. Use /docs or API endpoints.",
-        "endpoints": ["/health", "/scan", "/act", "/insights", "/docs"],
+        "service": "Vyuha AI - Autonomous Space Agent",
+        "status": "operational",
+        "endpoints": ["/health", "/scan", "/act"],
     }
 
 
