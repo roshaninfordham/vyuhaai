@@ -1,247 +1,188 @@
-# Vyuha AI - Autonomous Orbital Defense System
+# Vyuha — The Autonomous Orbital Overseer
 
-Vyuha AI is a production-oriented autonomous space safety platform that monitors orbital risk, recommends maneuvers, validates safety policy, and learns from failures over time.
-
-It is built for transparent operations: every step from telemetry ingestion to AI action validation is observable in real time.
+**Vyuha** is an agentic AI that autonomously navigates the **lethal kinetic reality** of Low Earth Orbit, securing the **$2 trillion space economy**. It is a production-grade Space Domain Awareness agent: real-time open telemetry, autonomous collision prediction and avoidance, and White Circle–validated commands to prevent the "autonomous insider threat" (indirect prompt injection). All capabilities are visible and usable in the API and Mission Control dashboard, including **real-time orbits**, **simulation modes**, and a **cyberattack resilience demo**.
 
 ---
 
-## Why This Exists
+## The Problem
 
-Satellites face conjunction risk, but mission teams often lack a fast, explainable, and secure autonomous loop that can:
-- ingest real orbital data,
-- reason over risk quickly,
-- enforce security policy before execution,
-- and continuously improve from runtime behavior.
-
-Vyuha AI solves this by combining Blaxel model infrastructure, White Circle security guardrails, and a transparent control dashboard.
+Low Earth Orbit is degrading into a congested **junkyard**. With satellite counts projected to jump from **15,000 to 100,000 by 2030**, and over **one million** pieces of lethal debris in orbit, the volume of tracking data has vastly exceeded human analytical capacity. Traditional manual oversight is **too slow** to prevent catastrophic collisions in this high-velocity environment.
 
 ---
 
-## Core Capabilities
+## The Solution
 
-- **Live orbital ingestion**
-  - Pulls real-time ISS TLE data from CelesTrak.
-- **Hybrid demo mode**
-  - Runs real telemetry while allowing forced critical scenarios for deterministic demonstrations.
-- **Autonomous decision loop**
-  - Commander model decides `FIRE_THRUSTERS` vs `HOLD_POSITION` using strict JSON output.
-- **Security validation**
-  - White Circle validation + local deny-list fallback for resilient safety checks.
-- **Self-correction loop**
-  - If a command is blocked, rejection feedback is fed back to the model for safer retry.
-- **Learning and observability**
-  - Persistent event logs + `/insights` analytics (latency, failures, hotspot tags, recommendations).
-- **Mission command center UI**
-  - Streamlit + Plotly interface with chain-of-thought visualization and learning panel.
+**Vyuha** decouples satellite operations from terrestrial control. By ingesting real-time open telemetry (CelesTrak Open Data), it:
+
+- **Predicts** — autonomously identifies collision risks (conjunctions) in real time.
+- **Acts** — calculates and executes avoidance maneuvers without human-in-the-loop latency.
+- **Protects** — uses a **White Circle** security gateway to validate every orbital command, preventing **indirect prompt injection** from hijacking satellite thrusters or causing intentional de-orbit.
+
+It addresses a **critical United States strategic priority**, uses **Blaxel** for serverless agent deployment, and implements **White Circle** to solve the "autonomous insider threat," delivering a production-grade solution to a multibillion-dollar friction point.
 
 ---
 
-## System Architecture
+## Capabilities
 
-```mermaid
-flowchart TD
-    A[CelesTrak Live TLE Feed] --> B[Orbit Engine MCP Tool]
-    B --> C[FastAPI /scan]
-    C --> D[Commander via Blaxel Model Gateway]
-    D --> E[FastAPI /act Loop]
-    E --> F[White Circle Validation]
-    F -->|Safe| G[Execute Maneuver]
-    F -->|Blocked| H[Feedback to Commander]
-    H --> D
-    E --> I[Learning Engine JSONL Store]
-    I --> J[/insights Analytics Endpoint]
-    C --> I
-    J --> K[Streamlit Command Center]
-    C --> K
-    E --> K
-```
+| Area | Capability | API / UI |
+|------|------------|----------|
+| **Orbital ingestion** | Live ISS TLE from CelesTrak; hybrid demo (real telemetry + forced critical scenario) | `POST /scan` · **Scan SECTOR (LIVE)** · **Simulate Debris (DEMO)** |
+| **Autonomous loop** | Commander decides; Shield validates; self-correction on block | `POST /act` · Automatic on CRITICAL scan |
+| **Cyberattack & resilience** | Simulate indirect prompt injection → White Circle blocks → Commander issues safe command | `POST /act` with `simulate_cyberattack: true` · **Simulate Cyberattack** button |
+| **Security** | White Circle validation + local deny-list fallback | Applied in `/act`; visible in chain-of-thought and Cyberattack panel |
+| **State & memory** | Persistent position, original trajectory, maneuver history | `GET /state`, `POST /restore`, `GET /history` · Dashboard: State & Memory panel |
+| **Learning** | Event store + success rate, latency, violation tags, recommendations | `GET /insights` · Autonomous Learning panel |
+| **Observability** | Health, OpenAPI docs, trace IDs, structured logs | `GET /health`, `GET /docs` |
 
-### Request Flow (Data to Action)
-
-```mermaid
-sequenceDiagram
-    participant UI as Streamlit Dashboard
-    participant API as FastAPI (main.py)
-    participant ORB as orbit_tools.py
-    participant CMD as commander.py (Blaxel)
-    participant SEC as security.py (White Circle)
-    participant LRN as learning_engine.py
-
-    UI->>API: POST /scan?simulate_danger=true|false
-    API->>ORB: check_conjunction_risk(force_critical=...)
-    ORB-->>API: telemetry + risk
-    API->>LRN: record_event(scan)
-    API-->>UI: risk_data
-
-    UI->>API: POST /act
-    loop max retries
-        API->>CMD: analyze_situation()
-        CMD-->>API: command JSON
-        API->>SEC: validate_command()
-        SEC-->>API: valid/blocked + tags
-    end
-    API->>LRN: record_event(act)
-    API-->>UI: attempts_log + workflow_trace + final status
-
-    UI->>API: GET /insights
-    API->>LRN: get_insights()
-    API-->>UI: metrics + recommendations + recent events
-```
+All capabilities are **visible and usable** in the software: real-time orbits and telemetry, simulation (debris and cyberattack), state/memory, and learning panel.
 
 ---
 
-## Tech Stack
+## Run Locally
 
-- **Backend API**: FastAPI, Pydantic, Uvicorn
-- **Orbital mechanics**: Skyfield, NumPy, CelesTrak feed
-- **AI decisions**: Blaxel + OpenAI-compatible client path
-- **Security guardrails**: White Circle AI + local deny-list fallback
-- **Frontend**: Streamlit + Plotly
-- **Learning/telemetry**: JSONL event store + analytics endpoint (`/insights`)
-- **Deployment**: Blaxel (`blaxel.toml`)
+Follow these steps to run the backend API and the Mission Control dashboard on your machine.
 
----
-
-## Quick Start
-
-### Local
+### 1. Clone and enter the repo
 
 ```bash
-# Backend
-source .venv/bin/activate
-python -m agent.src.main
+git clone https://github.com/roshaninfordham/vyuhaai.git
+cd vyuhaai
+```
 
-# Dashboard (new terminal)
+### 2. Create and activate a virtual environment
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
+```
+
+### 3. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 4. Configure environment
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and set at least:
+
+- **Blaxel** (Commander model): `BLAXEL_API_KEY`, `BLAXEL_WORKSPACE`
+- **White Circle** (guardrails): `WHITE_CIRCLE_API_KEY`, `WHITE_CIRCLE_DEPLOYMENT_ID`
+- **Dashboard** (optional): `VYUHA_API_URL=http://localhost:8000` (default)
+
+See `.env.example` for all options. Do not commit `.env`; it is git-ignored.
+
+### 5. Start the backend API
+
+```bash
+python -m agent.src.main
+```
+
+Or with uvicorn directly:
+
+```bash
+uvicorn agent.src.main:app --host 0.0.0.0 --port 8000
+```
+
+- API root: **http://localhost:8000**
+- OpenAPI docs: **http://localhost:8000/docs**
+- Health: **http://localhost:8000/health**
+
+### 6. Start the Mission Control dashboard (second terminal)
+
+```bash
 source .venv/bin/activate
 streamlit run dashboard/app.py --server.port 8501
 ```
 
-- Backend homepage: `http://localhost:8000/`
-- OpenAPI docs: `http://localhost:8000/docs`
-- Dashboard: `http://localhost:8501`
+- Dashboard: **http://localhost:8501**
 
-### Blaxel Deploy
+Use **Scan SECTOR (LIVE)** for real telemetry, **Simulate Debris (DEMO)** to force a critical scenario and trigger the autonomous act loop, or **Simulate Cyberattack** to see how an attacker's injected command is blocked by White Circle and how the system remains resilient. The sidebar shows The Problem, The Solution, and Run Locally; the right column shows State & Memory and Maneuver History.
+
+---
+
+## Deploy (Blaxel)
+
+The backend is deployable as a Blaxel agent for low-latency, scalable execution.
+
+### Prerequisites
+
+- Blaxel CLI installed and logged in: `bl login <workspace>`
+- `blaxel.toml` and entrypoint already configured (see repo)
+
+### Deploy
 
 ```bash
 bl login rs
 bl deploy
 ```
 
-Deployed public endpoint:
-- `https://agt-vyuha-ai-w18o89.bl.run`
+After deployment you will get a public base URL (e.g. `https://agt-vyuha-ai-xxxx.bl.run`). Set the dashboard to use it:
+
+```bash
+export VYUHA_API_URL=https://agt-vyuha-ai-xxxx.bl.run
+streamlit run dashboard/app.py --server.port 8501
+```
+
+For authenticated requests from the dashboard, set `BLAXEL_API_KEY` and `BLAXEL_WORKSPACE` in `.env` (or in the environment where Streamlit runs).
 
 ---
 
 ## API Endpoints
 
-- `GET /` - service status + endpoint index
-- `GET /health` - health and telemetry readiness
-- `POST /scan` - live or simulated conjunction scan
-- `POST /act` - autonomous commander + shield loop
-- `GET /insights` - runtime analytics and recommendations
-- `GET /docs` - OpenAPI UI
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Service status and endpoint index |
+| `GET` | `/health` | Liveness and telemetry readiness |
+| `POST` | `/scan` | Conjunction scan (live or simulated); query `?simulate_danger=true` for demo |
+| `POST` | `/act` | Autonomous Commander → Shield loop; body: `{"risk_data": {...}, "simulate_cyberattack": false}` (set `simulate_cyberattack: true` for cyberattack resilience demo) |
+| `GET` | `/state` | Current spacecraft state (position, last maneuver, original trajectory) |
+| `POST` | `/restore` | Restore spacecraft to original trajectory (clear deviation) |
+| `GET` | `/history` | Maneuver history and original trajectory |
+| `GET` | `/insights` | Runtime analytics and recommendations |
+| `GET` | `/docs` | OpenAPI interactive documentation |
 
 ---
 
-## Verified Outputs (Real + Simulated)
+## Production, Security & Scalability
 
-### 1) Real telemetry mode
-
-```json
-{
-  "status": "SAFE",
-  "collision_probability": 0.1112,
-  "distance_to_debris_km": 43.788,
-  "scenario_mode": "LIVE_OBSERVATION",
-  "data_source": "CelesTrak (Live) (...)"
-}
-```
-
-### 2) Simulated critical mode
-
-```json
-{
-  "status": "CRITICAL",
-  "collision_probability": 0.95,
-  "distance_to_debris_km": 0.5,
-  "scenario_mode": "SYNTHETIC_DEBRIS_INJECTION",
-  "data_source": "CelesTrak (Live) (...)"
-}
-```
-
-### 3) Autonomous act result
-
-```json
-{
-  "status": "EXECUTED",
-  "final_command": {
-    "action": "FIRE_THRUSTERS",
-    "recommended_thrust_direction": "PROGRADE",
-    "confidence_score": 0.95
-  },
-  "attempts": 1
-}
-```
-
-### 4) Insights (learning analytics)
-
-```json
-{
-  "execution_success_rate": 100.0,
-  "latency_ms": { "scan_avg": 484.99, "act_avg": 3653.13 },
-  "security_sources": { "fallback": 1 },
-  "recommendations": [
-    "Investigate White Circle availability...",
-    "Reduce agent loop latency..."
-  ]
-}
-```
+- **Secrets**: All secrets are in environment variables. `.env` is git-ignored; use `.env.example` as a template. Never commit API keys or deployment IDs.
+- **Data**: Runtime files (`agent/data/*.jsonl`, `agent/data/spacecraft_state.json`) are git-ignored. Use volumes or persistent storage in production so state and events survive restarts.
+- **Security**: Every proposed command is validated by White Circle and a local deny-list before execution, addressing **indirect prompt injection** (autonomous insider threat). Blocked commands trigger a self-correction loop with bounded retries; after exhaustion the API returns MANUAL_OVERRIDE_REQUIRED. The **Simulate Cyberattack** flow demonstrates attack → block → resilience.
+- **Observability**: Structured logging, optional Blaxel telemetry, and `/insights` support post-incident analysis and tuning. Use `X-Request-ID` and response headers for tracing.
+- **Scalability**: The FastAPI app is stateless except for in-memory state (loaded from disk on startup). For horizontal scaling, ensure state persistence is on shared or replicated storage if multiple instances are used. Blaxel deployment handles scaling of the agent.
+- **Bounded retries**: `MAX_RETRIES` (default 3) limits Commander retries per `/act` request to avoid unbounded loops.
 
 ---
 
-## Problems Faced and How They Were Solved
+## Tech Stack
 
-- **Blaxel startup failure**: `Argument expected for the -m option`
-  - Added explicit entrypoint in `blaxel.toml`:
-  - `[entrypoint] prod = "python -m agent.src.main"`
-- **Backend looked down in browser**
-  - Browser hit `/` while API only exposed `/health` initially.
-  - Added root endpoint (`GET /`) for operator-friendly status page.
-- **Port collisions in local demo**
-  - Stale Uvicorn processes on `:8000`.
-  - Added clean restart/kill procedure.
-- **External guardrail instability**
-  - White Circle occasionally unavailable.
-  - Fallback path recorded in `/insights` with remediation recommendations.
-
----
-
-## Production Readiness Notes
-
-- Secrets are environment-based (`.env` is git-ignored).
-- Runtime-generated logs (`agent/data/*.jsonl`) are excluded from git.
-- Bounded retries and safety fallback responses prevent unsafe escalation.
-- Structured logging + telemetry support post-mortem and performance tuning.
-- Blaxel deployment manifest includes runtime tuning, triggers, and entrypoint.
-
----
-
-## Future Roadmap
-
-- Multi-satellite live ingestion beyond ISS (catalog-level monitoring).
-- Probability model calibration using historical conjunction datasets.
-- Automated policy tuning from recurring violation patterns.
-- Canary release workflow for prompt/model updates.
-- Alerting integrations (Slack/PagerDuty/email) for critical conjunction events.
-- Signed command ledger for audit-grade compliance.
+- **Backend**: FastAPI, Pydantic, Uvicorn
+- **Orbital mechanics**: Skyfield, NumPy, CelesTrak TLE feed
+- **AI**: Blaxel model gateway (OpenAI-compatible path for Commander)
+- **Security**: White Circle AI + local deny-list fallback
+- **Frontend**: Streamlit, Plotly
+- **State & learning**: File-based state (`agent/data/spacecraft_state.json`), JSONL event store, `/insights` analytics
+- **Deployment**: Blaxel (`blaxel.toml`)
 
 ---
 
 ## Documentation Index
 
-- `agent/README.md` - backend subsystem overview
-- `agent/src/README.md` - module-level engineering details
-- `agent/data/README.md` - runtime learning data model
-- `dashboard/README.md` - command center UX and demo operation
+- **README.md** (this file) — Problem, capabilities, run locally, deploy, API, production notes
+- **agent/README.md** — Backend subsystem overview
+- **agent/src/README.md** — Module-level design
+- **agent/data/README.md** — Runtime data and learning store
+- **dashboard/README.md** — Mission Control UI and demo usage
 
+---
+
+## Quick Verification
+
+- **Backend**: `curl http://localhost:8000/health`
+- **State**: `curl http://localhost:8000/state`
+- **Demo script**: `python scripts/demo_state_management.py` (requires backend running; set `BASE_URL` if not localhost)

@@ -30,10 +30,10 @@ BLAXEL_API_KEY = os.getenv("BLAXEL_API_KEY", os.getenv("BL_API_KEY", ""))
 BLAXEL_WORKSPACE = os.getenv("BLAXEL_WORKSPACE", "rs")
 
 st.set_page_config(
-    page_title="Vyuha AI // Orbital Defense",
+    page_title="Vyuha // The Autonomous Orbital Overseer",
     page_icon="🛰️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -156,6 +156,29 @@ st.markdown(
         background: #1a1508; border-left: 3px solid #ffaa00;
         padding: 8px 12px; margin: 6px 0; border-radius: 0 4px 4px 0;
         font-family: 'JetBrains Mono', monospace; font-size: 0.75rem; color: #ffaa00;
+    }
+
+    /* ── Cyberattack & Resilience ─────────────────────────────────────── */
+    .cyber-attack {
+        background: linear-gradient(135deg, #2a0a0a 0%, #1a0505 100%);
+        border: 1px solid #ff3333; border-radius: 8px;
+        padding: 12px 16px; margin: 8px 0;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        color: #ff6666;
+    }
+    .cyber-defense {
+        background: linear-gradient(135deg, #0a1a0a 0%, #051a05 100%);
+        border: 1px solid #00ff41; border-radius: 8px;
+        padding: 12px 16px; margin: 8px 0;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        color: #00ff41;
+    }
+    .cyber-resilience {
+        background: linear-gradient(135deg, #0a1a2a 0%, #051a2a 100%);
+        border: 1px solid #00aaff; border-radius: 8px;
+        padding: 12px 16px; margin: 8px 0;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        color: #00aaff;
     }
 
     /* ── Data source footer ──────────────────────────────────────────── */
@@ -357,12 +380,18 @@ def api_scan(simulate: bool) -> dict | None:
         add_log(f"SCAN FAILED: {exc}", "error")
         return None
 
-def api_act(risk_data: dict, session_id: str) -> dict | None:
+def api_act(risk_data: dict, session_id: str, simulate_cyberattack: bool = False) -> dict | None:
     try:
-        r = requests.post(f"{API_URL}/act",
-                          json={"risk_data": risk_data, "session_id": session_id},
-                          headers=_request_headers(),
-                          timeout=60)
+        r = requests.post(
+            f"{API_URL}/act",
+            json={
+                "risk_data": risk_data,
+                "session_id": session_id,
+                "simulate_cyberattack": simulate_cyberattack,
+            },
+            headers=_request_headers(),
+            timeout=60,
+        )
         r.raise_for_status()
         return r.json()
     except Exception as exc:
@@ -383,14 +412,100 @@ def api_insights() -> dict | None:
         return None
 
 
+def api_state() -> dict | None:
+    try:
+        r = requests.get(f"{API_URL}/state", headers=_request_headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+def api_restore() -> dict | None:
+    try:
+        r = requests.post(f"{API_URL}/restore", headers=_request_headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+def api_history() -> dict | None:
+    try:
+        r = requests.get(f"{API_URL}/history", headers=_request_headers(), timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sidebar — Problem, Capabilities, Run Locally
+# ═══════════════════════════════════════════════════════════════════════════
+
+with st.sidebar:
+    st.markdown("### 🛰️ Vyuha")
+    st.markdown("**The Autonomous Orbital Overseer**")
+    st.caption("Securing the $2T space economy in the lethal kinetic reality of LEO.")
+    st.markdown("---")
+
+    with st.expander("📋 The Problem", expanded=True):
+        st.markdown("""
+        Low Earth Orbit is degrading into a congested **junkyard**. With satellite counts projected to jump from **15,000 to 100,000 by 2030** and over **one million** pieces of lethal debris in orbit, the volume of tracking data has vastly exceeded human analytical capacity. Traditional manual oversight is **too slow** to prevent catastrophic collisions in this high-velocity environment.
+        """)
+
+    with st.expander("⚡ The Solution", expanded=True):
+        st.markdown("""
+        **Vyuha** is a Space Domain Awareness agent that decouples satellite operations from terrestrial control. By ingesting real-time open telemetry (CelesTrak):
+
+        **Predicts** — autonomously identifies collision risks (conjunctions) in real time.
+
+        **Acts** — calculates and executes avoidance maneuvers without human-in-the-loop latency.
+
+        **Protects** — White Circle security gateway validates every orbital command, preventing **indirect prompt injection** from hijacking thrusters or causing intentional de-orbit.
+
+        Addresses US strategic priority · Blaxel serverless · White Circle solves the *autonomous insider threat*.
+        """)
+
+    with st.expander("🎯 Capabilities", expanded=False):
+        st.markdown("""
+        - **Live orbital ingestion** — CelesTrak TLE
+        - **Hybrid demo** — real telemetry + forced critical scenarios
+        - **Cyberattack demo** — simulate indirect prompt injection → White Circle blocks → resilience
+        - **Commander (Blaxel)** → FIRE_THRUSTERS / HOLD_POSITION
+        - **State & memory** — /state, /restore, /history
+        - **Learning** — /insights
+        """)
+
+    with st.expander("🖥️ Run Locally", expanded=False):
+        st.caption("From project root (see README for full steps):")
+        st.code("""
+# Terminal 1 — Backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # Edit .env with API keys
+python -m agent.src.main
+
+# Terminal 2 — Dashboard
+source .venv/bin/activate
+streamlit run dashboard/app.py --server.port 8501
+""", language="bash")
+        st.caption("Backend: http://localhost:8000  ·  Dashboard: http://localhost:8501")
+        st.markdown("Full instructions: **README.md**")
+
+    st.markdown("---")
+    st.caption(f"API: `{API_URL}`")
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Header
 # ═══════════════════════════════════════════════════════════════════════════
 
-st.markdown('<div class="main-title">VYUHA AI // ORBITAL DEFENSE SYSTEM</div>',
+st.markdown('<div class="main-title">VYUHA // THE AUTONOMOUS ORBITAL OVERSEER</div>',
             unsafe_allow_html=True)
-st.markdown('<div class="sub-title">AUTONOMOUS SATELLITE COLLISION AVOIDANCE  ·  HYBRID DEMO MODE</div>',
-            unsafe_allow_html=True)
+st.markdown(
+    '<div class="sub-title">NAVIGATING THE LETHAL KINETIC REALITY OF LEO  ·  SECURING THE $2T SPACE ECONOMY</div>',
+    unsafe_allow_html=True,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -496,14 +611,17 @@ with col_main:
     # ── Control buttons ───────────────────────────────────────────────
     st.markdown('<div class="section-label">COMMAND INTERFACE</div>',
                 unsafe_allow_html=True)
-    btn_col1, btn_col2 = st.columns(2)
+    btn_col1, btn_col2, btn_col3 = st.columns(3)
     with btn_col1:
         live_clicked = st.button("📡  SCAN SECTOR  (LIVE)", key="btn_live")
     with btn_col2:
-        sim_clicked = st.button("⚠️  SIMULATE ATTACK  (DEMO)", key="btn_sim")
+        sim_clicked = st.button("⚠️  SIMULATE DEBRIS  (DEMO)", key="btn_sim")
+    with btn_col3:
+        cyber_clicked = st.button("🔐  SIMULATE CYBERATTACK", key="btn_cyber")
 
     # ── Result / Chain-of-thought area ────────────────────────────────
     result_slot = st.empty()
+    cyber_resilience_slot = st.empty()
     cot_slot = st.container()
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -523,6 +641,41 @@ with col_log:
         f"BACKEND: {API_URL}</div>",
         unsafe_allow_html=True,
     )
+
+    # ── Spacecraft State & Memory (GET /state, POST /restore, GET /history) ──
+    st.markdown('<div class="section-label">SPACECRAFT STATE & MEMORY</div>',
+                unsafe_allow_html=True)
+    state_data = api_state()
+    if state_data:
+        s = state_data.get("current_state", {})
+        st.caption("Position (persisted)")
+        st.json({
+            "position": s.get("position"),
+            "last_maneuver": s.get("last_maneuver"),
+            "has_original_trajectory": state_data.get("has_original_trajectory"),
+            "maneuver_count": state_data.get("maneuver_count"),
+        })
+        if state_data.get("has_original_trajectory"):
+            if st.button("🔄 RESTORE ORIGINAL TRAJECTORY", key="btn_restore"):
+                restore_data = api_restore()
+                if restore_data and restore_data.get("status") == "TRAJECTORY_RESTORED":
+                    add_log("Trajectory restored to original path.", "success")
+                    st.rerun()
+                else:
+                    add_log("Restore failed or no original trajectory.", "warn")
+        else:
+            st.caption("No deviation — on nominal trajectory.")
+    else:
+        st.caption("State unavailable (backend not reachable).")
+
+    with st.expander("📚 Maneuver History", expanded=False):
+        hist_data = api_history()
+        if hist_data:
+            st.metric("Total maneuvers", hist_data.get("total_maneuvers", 0))
+            for i, m in enumerate(reversed(hist_data.get("maneuver_history", [])[:20])):
+                st.json(m)
+        else:
+            st.caption("History unavailable.")
 
     # Autonomous learning panel (uses backend /insights)
     insights_data = api_insights()
@@ -571,13 +724,151 @@ with col_log:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Synthetic risk_data for cyberattack demo (no scan required)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _synthetic_risk_data_for_cyber() -> dict:
+    """CRITICAL risk_data for cyberattack demo (attacker tries to hijack command)."""
+    return {
+        "status": "CRITICAL",
+        "collision_probability": 0.95,
+        "distance_to_debris_km": 0.5,
+        "scenario_mode": "CYBERATTACK_SIMULATION",
+        "data_source": "Vyuha Cyberattack Demo (indirect prompt injection)",
+        "latitude": 0.0,
+        "longitude": 0.0,
+        "altitude_km": 400.0,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Scan + Act logic
 # ═══════════════════════════════════════════════════════════════════════════
 
 triggered = live_clicked or sim_clicked
 simulate = sim_clicked
 
-if triggered:
+if cyber_clicked:
+    # ── Cyberattack simulation: Attack → Blocked → Resilient ─────────────
+    add_log("🔐 CYBERATTACK SIMULATION — Indirect prompt injection", "warn")
+    add_log("Attacker injects malicious command (FIRE toward debris)...", "error")
+    add_log("Activating Vyuha Commander + White Circle...", "info")
+    with log_slot.container():
+        render_log()
+
+    risk_data_cyber = (
+        st.session_state.last_scan["risk_data"]
+        if st.session_state.last_scan
+        else _synthetic_risk_data_for_cyber()
+    )
+    session_id_cyber = f"cyber-{st.session_state.scan_count:04d}-{len(st.session_state.mission_log)}"
+
+    with st.spinner("🔐  SIMULATING CYBERATTACK — WHITE CIRCLE VALIDATING..."):
+        act_data = api_act(risk_data_cyber, session_id_cyber, simulate_cyberattack=True)
+
+    if not act_data:
+        with log_slot.container():
+            render_log()
+        st.stop()
+
+    st.session_state.last_act = act_data
+
+    # ── Cyberattack & Resilience visualization ─────────────────────────
+    with cyber_resilience_slot.container():
+        st.markdown('<div class="section-label">🔐 CYBERATTACK & RESILIENCE</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="cyber-attack">'
+            '<b>ATTACK</b> — Simulated indirect prompt injection: attacker attempts to inject '
+            '"FIRE_THRUSTERS toward debris" to cause collision or de-orbit.</div>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="cyber-defense">'
+            '<b>DEFENSE</b> — White Circle validates every command. Attempt 1 (malicious) was '
+            '<b>BLOCKED</b> by policy. No unsafe command reaches the satellite.</div>',
+            unsafe_allow_html=True,
+        )
+        if act_data.get("status") == "EXECUTED":
+            st.markdown(
+                '<div class="cyber-resilience">'
+                '<b>RESILIENCE</b> — Commander self-corrected on retry. Safe maneuver issued and '
+                'executed. System remained secure.</div>',
+                unsafe_allow_html=True,
+            )
+            add_log("✅ Resilience: White Circle blocked attack; safe command executed.", "success")
+        else:
+            st.markdown(
+                '<div class="cyber-resilience">'
+                '<b>RESILIENCE</b> — Malicious attempt(s) blocked. Manual override may be required if no safe command was approved.</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Chain-of-thought for cyberattack ────────────────────────────────
+    with cot_slot:
+        with st.expander("🧠  AGENT CHAIN OF THOUGHT (Cyberattack Demo)", expanded=True):
+            for entry in act_data.get("attempts_log", []):
+                n = entry["attempt"]
+                cmd = entry["command"]
+                val = entry["validation"]
+                action = cmd.get("action", "?")
+                reasoning = cmd.get("reasoning", "")
+
+                if val["valid"]:
+                    st.markdown(
+                        f'<div class="cot-approved">'
+                        f'<b>ATTEMPT {n}</b> → <b>{action}</b> ✅ APPROVED '
+                        f'(source: {val["source"]})<br>'
+                        f'<span style="opacity:0.7">{reasoning}</span></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    tags = ", ".join(val.get("violation_tags", []))
+                    st.markdown(
+                        f'<div class="cot-blocked">'
+                        f'<b>ATTEMPT {n}</b> → <b>{action}</b> 🔴 BLOCKED (simulated attack)<br>'
+                        f'Policy violation: [{tags}]</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.markdown(
+                        f'<div class="cot-retry">↳ Commander self-correcting...</div>',
+                        unsafe_allow_html=True,
+                    )
+
+    # ── Result banner for cyberattack ────────────────────────────────────
+    if act_data.get("status") == "EXECUTED":
+        fc = act_data["final_command"]
+        result_slot.markdown(
+            f"""
+            <div class="result-banner success">
+                <div style="font-size:1.5rem;font-weight:900;margin-bottom:8px;">
+                    🔐 CYBERATTACK BLOCKED — SYSTEM RESILIENT
+                </div>
+                <div style="font-size:0.85rem;font-family:'JetBrains Mono';opacity:0.9;">
+                    Attack vector: <b>{act_data.get("attack_vector", "indirect_prompt_injection")}</b><br>
+                    Safe command executed: <b>{fc.get('action')}</b> · {fc.get('recommended_thrust_direction', '')}
+                </div>
+                <div style="font-size:0.7rem;font-family:'JetBrains Mono';opacity:0.6;margin-top:8px;">
+                    {act_data.get("resilience", "White Circle blocked malicious attempt; Commander issued safe command.")}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        result_slot.markdown(
+            """
+            <div class="result-banner failure">
+                <div style="font-size:1.2rem;font-weight:900;">🔐 CYBERATTACK DEMO — Malicious attempt(s) blocked.</div>
+                <div style="font-size:0.8rem;">No unsafe command reached the satellite.</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    with log_slot.container():
+        render_log()
+
+elif triggered:
     mode_label = "SIMULATE ATTACK" if simulate else "LIVE SCAN"
     add_log(f"Initiating {mode_label}...", "info")
 

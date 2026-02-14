@@ -32,3 +32,4 @@ Thumbs.db
 
 # Runtime telemetry / learning artifacts
 agent/data/*.jsonl
+agent/data/spacecraft_state.json

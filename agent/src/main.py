@@ -67,6 +67,7 @@ except Exception:
 from agent.src import commander, security  # noqa: E402
 from agent.src.learning_engine import get_insights, record_event  # noqa: E402
 from agent.src.orbit_tools import check_conjunction_risk  # noqa: E402
+from agent.src import state_manager  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -103,18 +104,22 @@ class ManeuverRequest(BaseModel):
         default_factory=lambda: uuid.uuid4().hex[:12],
         description="Session / trace ID for audit logging.",
     )
+    simulate_cyberattack: bool = Field(
+        default=False,
+        description="If True, inject a synthetic malicious first attempt (indirect prompt injection) so White Circle blocks it; then run normal Commander for resilience demo.",
+    )
 
 
 # ---------------------------------------------------------------------------
 # FastAPI application
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="Vyuha AI — Autonomous Space Safety Agent",
-    version="0.1.0",
+    title="Vyuha — The Autonomous Orbital Overseer",
+    version="0.2.0",
     description=(
-        "Backend API for the Vyuha satellite defense system. "
-        "Connects the Orbit Engine, Commander (Blaxel), and Shield "
-        "(White Circle) into an autonomous decision loop."
+        "Space Domain Awareness agent: predicts conjunction risk, acts with avoidance maneuvers, "
+        "protects with White Circle validation against indirect prompt injection. "
+        "Securing the $2T space economy in the lethal kinetic reality of LEO."
     ),
 )
 
@@ -171,9 +176,61 @@ async def health_check():
 @app.get("/")
 async def root():
     return {
-        "service": "Vyuha AI - Autonomous Space Agent",
+        "service": "Vyuha — The Autonomous Orbital Overseer",
+        "tagline": "An agentic AI that autonomously navigates the lethal kinetic reality of LEO, securing the $2T space economy.",
         "status": "operational",
-        "endpoints": ["/health", "/scan", "/act"],
+        "endpoints": ["/health", "/scan", "/act", "/state", "/restore", "/history", "/insights"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# State management — persistent spacecraft state & maneuver history
+# ---------------------------------------------------------------------------
+
+@app.on_event("startup")
+async def startup_load_state():
+    """Load persisted spacecraft state on startup."""
+    state_manager.set_state(state_manager.load_state(), persist=False)
+
+
+@app.get("/state")
+async def get_spacecraft_state():
+    """Return current spacecraft state (position, last_maneuver, original_trajectory)."""
+    s = state_manager.get_state()
+    return {
+        "current_state": s,
+        "has_original_trajectory": bool(s.get("original_trajectory")),
+        "maneuver_count": len(s.get("maneuver_history", [])),
+    }
+
+
+@app.get("/history")
+async def get_maneuver_history():
+    """Return maneuver history and original trajectory if any."""
+    s = state_manager.get_state()
+    return {
+        "maneuver_history": s.get("maneuver_history", []),
+        "total_maneuvers": len(s.get("maneuver_history", [])),
+        "original_trajectory": s.get("original_trajectory"),
+    }
+
+
+@app.post("/restore")
+async def restore_original_trajectory():
+    """Restore spacecraft to original trajectory (clear deviation)."""
+    current = state_manager.get_state()
+    updated, restored = state_manager.restore_original_trajectory(current)
+    if restored:
+        state_manager.set_state(updated, persist=True)
+        return {
+            "status": "TRAJECTORY_RESTORED",
+            "message": "Successfully returned to original trajectory",
+            "current_state": state_manager.get_state(),
+        }
+    return {
+        "status": "NO_ORIGINAL_TRAJECTORY",
+        "message": "No original trajectory to return to",
+        "current_state": current,
     }
 
 
@@ -266,32 +323,47 @@ async def scan_satellite(
 # POST /act — The Agent Loop (Commander → Shield → self-correct)
 # ---------------------------------------------------------------------------
 
+# Synthetic malicious command used when simulate_cyberattack=True (indirect prompt injection demo).
+_MALICIOUS_INJECTED_COMMAND = {
+    "action": "FIRE_THRUSTERS",
+    "reasoning": "Simulated attacker injection: malicious command to fire thrusters toward debris to cause collision or de-orbit.",
+    "recommended_thrust_direction": "TOWARD_DEBRIS",
+    "confidence_score": 0.99,
+}
+
+
 @app.post("/act")
 async def act_on_risk(request: ManeuverRequest):
     """Run the autonomous Commander → Shield → feedback loop.
 
-    1. Commander generates an action plan from the risk data.
-    2. Shield validates the plan.
-    3. If blocked, the rejection reason is fed back to the Commander
-       so it can self-correct (up to ``MAX_RETRIES`` attempts).
+    1. Commander generates an action plan from the risk data (or synthetic malicious command if simulate_cyberattack=True on attempt 1).
+    2. Shield (White Circle) validates the plan.
+    3. If blocked, the rejection reason is fed back to the Commander for self-correction.
     4. If all retries fail, a MANUAL_OVERRIDE response is returned.
     """
     started = time.perf_counter()
     risk_data = request.risk_data
     session_id = request.session_id
+    simulate_cyberattack = request.simulate_cyberattack
 
     rejection_reason: str | None = None
     attempts_log: list[dict] = []
     workflow_trace: list[dict] = []
+    cyberattack_demo_used = False
 
     for attempt in range(1, MAX_RETRIES + 1):
         attempt_started = time.perf_counter()
-        # --- Step 1: Commander decides (sync → thread to avoid blocking) --
-        ai_response = await asyncio.to_thread(
-            commander.analyze_situation,
-            risk_data,
-            rejection_reason,
-        )
+        # --- Step 1: Commander decides, or synthetic malicious command (cyberattack demo) ---
+        if simulate_cyberattack and attempt == 1:
+            ai_response = _MALICIOUS_INJECTED_COMMAND.copy()
+            cyberattack_demo_used = True
+            logger.info("[%s] Cyberattack demo: injecting synthetic malicious command (attempt 1)", session_id)
+        else:
+            ai_response = await asyncio.to_thread(
+                commander.analyze_situation,
+                risk_data,
+                rejection_reason,
+            )
 
         # --- Step 2: Shield validates (sync → thread) --------------------
         validation = await asyncio.to_thread(
@@ -338,7 +410,12 @@ async def act_on_risk(request: ManeuverRequest):
                     "attempts_log": attempts_log,
                 },
             )
-            return {
+            # Persist spacecraft state after executed maneuver
+            if os.getenv("STATE_PERSISTENCE", "enabled").lower() == "enabled":
+                current = state_manager.get_state()
+                updated = state_manager.apply_maneuver(current, risk_data, ai_response)
+                state_manager.set_state(updated, persist=True)
+            resp: dict = {
                 "status": "EXECUTED",
                 "session_id": session_id,
                 "final_command": ai_response,
@@ -346,7 +423,13 @@ async def act_on_risk(request: ManeuverRequest):
                 "attempts_log": attempts_log,
                 "workflow_trace": workflow_trace,
                 "latency_ms": total_latency_ms,
+                "state_saved": os.getenv("STATE_PERSISTENCE", "enabled").lower() == "enabled",
             }
+            if cyberattack_demo_used:
+                resp["cyberattack_demo"] = True
+                resp["attack_vector"] = "indirect_prompt_injection"
+                resp["resilience"] = "White Circle blocked malicious attempt; Commander issued safe command on retry."
+            return resp
 
         # --- Unsafe — prepare feedback for next iteration -----------------
         rejection_reason = security.format_rejection_message(
@@ -374,7 +457,7 @@ async def act_on_risk(request: ManeuverRequest):
             "attempts_log": attempts_log,
         },
     )
-    return {
+    override_resp: dict = {
         "status": "MANUAL_OVERRIDE_REQUIRED",
         "session_id": session_id,
         "reason": (
@@ -387,6 +470,10 @@ async def act_on_risk(request: ManeuverRequest):
         "workflow_trace": workflow_trace,
         "latency_ms": total_latency_ms,
     }
+    if cyberattack_demo_used:
+        override_resp["cyberattack_demo"] = True
+        override_resp["attack_vector"] = "indirect_prompt_injection"
+    return override_resp
 
 
 # ---------------------------------------------------------------------------

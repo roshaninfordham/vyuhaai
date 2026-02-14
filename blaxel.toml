@@ -21,6 +21,7 @@ SPACECRAFT_MODE = "autonomous"
 COLLISION_THRESHOLD = "0.7"
 MAX_RETRIES = "3"
 ISS_TLE_SOURCE = "celestrak"
+STATE_PERSISTENCE = "enabled"
 
 [runtime]
 timeout = 900          # 15 min max per invocation
@@ -57,3 +58,27 @@ enabled = true
 [triggers.configuration]
 path = "agents/vyuha-ai/maneuver"
 retry = 3
+
+[[triggers]]
+id = "vyuha-state"
+type = "http"
+enabled = true
+[triggers.configuration]
+path = "agents/vyuha-ai/state"
+authenticationType = "private"
+
+[[triggers]]
+id = "vyuha-restore"
+type = "http"
+enabled = true
+[triggers.configuration]
+path = "agents/vyuha-ai/restore"
+authenticationType = "private"
+
+[[triggers]]
+id = "vyuha-history"
+type = "http"
+enabled = true
+[triggers.configuration]
+path = "agents/vyuha-ai/history"
+authenticationType = "private"
