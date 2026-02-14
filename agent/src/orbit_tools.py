@@ -19,10 +19,12 @@ Run standalone for local testing:
 from __future__ import annotations
 
 import hashlib
+import logging
 import random
 from datetime import datetime, timezone
 
 import numpy as np
+import requests
 from mcp.server.fastmcp import FastMCP
 from skyfield.api import EarthSatellite, load
 
@@ -33,6 +35,68 @@ mcp = FastMCP("vyuha-orbital-tools")
 
 # Skyfield time-scale (loaded once, cached by skyfield internally)
 ts = load.timescale()
+
+logger = logging.getLogger("vyuha.orbit")
+
+# ---------------------------------------------------------------------------
+# CelesTrak live TLE source
+# ---------------------------------------------------------------------------
+CELESTRAK_URL = (
+    "https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=tle"
+)
+
+# Hardcoded fallback TLE — used when CelesTrak is unreachable
+_FALLBACK_TLE = (
+    "1 25544U 98067A   24100.50000000  .00016717  00000-0  10270-3 0  9002",
+    "2 25544  51.6400 208.9163 0002894 121.1600 239.0100 15.49999029999990",
+)
+
+
+def fetch_live_tle(
+    satellite_name: str = "ISS (ZARYA)",
+) -> tuple[str, str]:
+    """Fetch the latest TLE for a satellite from CelesTrak.
+
+    Parameters
+    ----------
+    satellite_name : str
+        Exact name line as it appears in the CelesTrak TLE file.
+        Defaults to ``"ISS (ZARYA)"``.
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(tle_line1, tle_line2)`` stripped of whitespace.
+
+    Raises
+    ------
+    ValueError
+        If the satellite name is not found in the response.
+    requests.RequestException
+        On network / HTTP errors.
+    """
+    resp = requests.get(CELESTRAK_URL, timeout=15)
+    resp.raise_for_status()
+
+    lines = [line.strip() for line in resp.text.strip().splitlines() if line.strip()]
+
+    # TLE format: name, line1, line2 — repeating in groups of 3
+    for i, line in enumerate(lines):
+        if line.upper() == satellite_name.upper():
+            if i + 2 < len(lines):
+                tle1 = lines[i + 1]
+                tle2 = lines[i + 2]
+                logger.info(
+                    "Live TLE fetched for '%s' — epoch in line1: %s",
+                    satellite_name,
+                    tle1[18:32],
+                )
+                return tle1, tle2
+
+    raise ValueError(
+        f"Satellite '{satellite_name}' not found in CelesTrak response "
+        f"({len(lines)} lines parsed)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -71,26 +135,42 @@ def _simulate_debris_encounter(seed: int) -> tuple[float, float]:
 
 @mcp.tool()
 def check_conjunction_risk(
-    satellite_tle_line1: str,
-    satellite_tle_line2: str,
+    satellite_tle_line1: str = "",
+    satellite_tle_line2: str = "",
 ) -> dict:
     """Propagate a satellite TLE to the current epoch and assess conjunction
     risk against a simulated debris catalogue.
 
+    If TLE lines are omitted (empty strings), the function automatically
+    fetches the latest ISS TLE from CelesTrak in real time.
+
     Parameters
     ----------
-    satellite_tle_line1 : str
+    satellite_tle_line1 : str, optional
         First line of the two-line element set (TLE).
-    satellite_tle_line2 : str
+    satellite_tle_line2 : str, optional
         Second line of the two-line element set (TLE).
 
     Returns
     -------
     dict
         Conjunction risk report including geocentric position, simulated
-        collision probability, and an actionable status label.
+        collision probability, data source, and an actionable status label.
     """
-    # --- Propagate the orbit ---
+    # --- Resolve TLE: live fetch → fallback --------------------------------
+    data_source: str
+    if not satellite_tle_line1.strip() or not satellite_tle_line2.strip():
+        try:
+            satellite_tle_line1, satellite_tle_line2 = fetch_live_tle()
+            data_source = "CelesTrak (Live)"
+        except Exception as exc:
+            logger.warning("Live TLE fetch failed (%s) — using fallback", exc)
+            satellite_tle_line1, satellite_tle_line2 = _FALLBACK_TLE
+            data_source = "Hardcoded Fallback"
+    else:
+        data_source = "User-Provided"
+
+    # --- Propagate the orbit -----------------------------------------------
     satellite = EarthSatellite(
         satellite_tle_line1.strip(),
         satellite_tle_line2.strip(),
@@ -106,14 +186,14 @@ def check_conjunction_risk(
     longitude = round(subpoint.longitude.degrees, 6)
     altitude_km = round(subpoint.elevation.km, 3)
 
-    # --- Simulated debris encounter ---
+    # --- Simulated debris encounter ----------------------------------------
     utc_now = datetime.now(timezone.utc)
     seed = _deterministic_seed(
         satellite_tle_line1, satellite_tle_line2, utc_now.minute,
     )
     collision_probability, distance_to_debris_km = _simulate_debris_encounter(seed)
 
-    # --- Status classification ---
+    # --- Status classification ---------------------------------------------
     if collision_probability > 0.7:
         status = "CRITICAL"
     elif collision_probability > 0.4:
@@ -129,6 +209,7 @@ def check_conjunction_risk(
         "distance_to_debris_km": distance_to_debris_km,
         "collision_probability": collision_probability,
         "status": status,
+        "data_source": f"{data_source} (Live Fetch: {utc_now.strftime('%Y-%m-%d %H:%M:%S UTC')})",
     }
 
 

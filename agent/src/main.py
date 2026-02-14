@@ -76,12 +76,6 @@ logging.basicConfig(
 logger = logging.getLogger("vyuha.main")
 
 # ---------------------------------------------------------------------------
-# ISS TLE (hardcoded for the hackathon demo)
-# ---------------------------------------------------------------------------
-ISS_TLE_LINE1 = "1 25544U 98067A   24100.50000000  .00016717  00000-0  10270-3 0  9002"
-ISS_TLE_LINE2 = "2 25544  51.6400 208.9163 0002894 121.1600 239.0100 15.49999029999990"
-
-# ---------------------------------------------------------------------------
 # Agent-loop config
 # ---------------------------------------------------------------------------
 MAX_RETRIES: int = 3
@@ -180,18 +174,18 @@ async def health_check():
 async def scan_satellite(request: RiskAnalysisRequest):
     """Propagate the satellite orbit and return conjunction-risk data.
 
-    For the hackathon demo the ISS TLE is used regardless of the
-    ``satellite_id`` provided.
+    Fetches the latest ISS (ZARYA) TLE from CelesTrak in real time.
+    Falls back to a hardcoded TLE if the network is unavailable.
     """
     try:
-        risk_data = await asyncio.to_thread(
-            check_conjunction_risk, ISS_TLE_LINE1, ISS_TLE_LINE2,
-        )
+        # No args → auto-fetches live TLE from CelesTrak
+        risk_data = await asyncio.to_thread(check_conjunction_risk)
         logger.info(
-            "Scan complete for %s — prob=%.4f status=%s",
+            "Scan complete for %s — prob=%.4f status=%s source=%s",
             request.satellite_id,
             risk_data.get("collision_probability", -1),
             risk_data.get("status", "?"),
+            risk_data.get("data_source", "?"),
         )
         return {
             "satellite_id": request.satellite_id,
