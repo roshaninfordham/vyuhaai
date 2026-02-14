@@ -4,8 +4,8 @@ Vyuha AI — The Commander (Task 2)
 Decision-making brain for the autonomous satellite defense system.
 
 Receives telemetry / conjunction-risk data from the Orbit Engine (Task 1)
-and uses Google Gemini 1.5 Flash to decide whether to hold position or
-execute an avoidance maneuver.
+and uses an LLM via Blaxel AI's model gateway to decide whether to hold
+position or execute an avoidance maneuver.
 
 Usage (standalone test):
     python -m agent.src.commander
@@ -17,14 +17,36 @@ import json
 import os
 import re
 
-import google.generativeai as genai
+import httpx
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # ---------------------------------------------------------------------------
 # Environment & API configuration
 # ---------------------------------------------------------------------------
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+
+BLAXEL_API_KEY: str = os.getenv("BLAXEL_API_KEY", "")
+BLAXEL_WORKSPACE: str = os.getenv("BLAXEL_WORKSPACE", "rs")
+BLAXEL_MODEL_BASE_URL: str = (
+    f"https://run.blaxel.ai/{BLAXEL_WORKSPACE}/models/sandbox-openai/v1"
+)
+
+# The OpenAI SDK appends /chat/completions to base_url automatically.
+# Blaxel requires X-Blaxel-Authorization (not standard Authorization) and
+# X-Blaxel-Workspace headers, so we inject them via a custom httpx client.
+_http_client = httpx.Client(
+    headers={
+        "X-Blaxel-Authorization": f"Bearer {BLAXEL_API_KEY}",
+        "X-Blaxel-Workspace": BLAXEL_WORKSPACE,
+    },
+)
+
+client = OpenAI(
+    api_key=BLAXEL_API_KEY,          # SDK still wants a non-empty string
+    base_url=BLAXEL_MODEL_BASE_URL,
+    http_client=_http_client,
+)
 
 # ---------------------------------------------------------------------------
 # System prompt — governs Vyuha's decision logic
@@ -66,8 +88,11 @@ SAFETY_FALLBACK: dict = {
 # Core decision function
 # ---------------------------------------------------------------------------
 
-def analyze_situation(risk_data: dict) -> dict:
-    """Feed telemetry data to Gemini and return a structured decision.
+def analyze_situation(
+    risk_data: dict,
+    previous_rejection_reason: str | None = None,
+) -> dict:
+    """Feed telemetry data to the LLM and return a structured decision.
 
     Parameters
     ----------
@@ -75,6 +100,9 @@ def analyze_situation(risk_data: dict) -> dict:
         Conjunction-risk report as produced by
         ``orbit_tools.check_conjunction_risk``.  Expected keys include
         ``altitude_km``, ``collision_probability``, and ``status``.
+    previous_rejection_reason : str, optional
+        If the Commander's prior response was blocked by the Shield,
+        pass the rejection reason here so the model can self-correct.
 
     Returns
     -------
@@ -95,14 +123,27 @@ def analyze_situation(risk_data: dict) -> dict:
         f"Analyze this data and provide your decision as JSON."
     )
 
-    try:
-        model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
-            system_instruction=SYSTEM_PROMPT,
+    # -- Feedback loop: inject rejection context so the model self-corrects -
+    if previous_rejection_reason:
+        user_prompt += (
+            f"\n\nCRITICAL UPDATE: Your previous plan was BLOCKED by the "
+            f"security system because: '{previous_rejection_reason}'. "
+            f"You must generate a NEW plan that avoids this specific violation."
         )
 
-        response = model.generate_content(user_prompt)
-        raw_text = response.text.strip()
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.2,
+            max_tokens=256,
+            timeout=30,
+        )
+
+        raw_text = response.choices[0].message.content.strip()
 
         # -- Strip Markdown fences if the model wraps its output -------------
         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
@@ -129,7 +170,7 @@ def analyze_situation(risk_data: dict) -> dict:
         print(f"[Commander] JSON parse error: {exc}")
         return SAFETY_FALLBACK.copy()
     except Exception as exc:  # noqa: BLE001
-        print(f"[Commander] Gemini API error: {exc}")
+        print(f"[Commander] LLM API error: {exc}")
         return SAFETY_FALLBACK.copy()
 
 
