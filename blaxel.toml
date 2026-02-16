@@ -16,12 +16,20 @@ models = ["sandbox-openai"]
 # MCP tool-servers the agent can invoke
 functions = ["vyuha-orbital-tools"]
 
+# ---------------------------------------------------------------------------
+# Environment — set secrets (BLAXEL_API_KEY, WHITE_CIRCLE_*) in Blaxel dashboard
+# ---------------------------------------------------------------------------
 [env]
 SPACECRAFT_MODE = "autonomous"
 COLLISION_THRESHOLD = "0.7"
 MAX_RETRIES = "3"
 ISS_TLE_SOURCE = "celestrak"
 STATE_PERSISTENCE = "enabled"
+# White Circle (security gateway) — set WHITE_CIRCLE_API_KEY and WHITE_CIRCLE_DEPLOYMENT_ID in Blaxel project
+WHITE_CIRCLE_BASE_URL = "https://us.whitecircle.ai"
+WHITE_CIRCLE_VERSION = "2025-12-01"
+# Overshoot AI (visual threat detection) — set OVERSHOOT_API_KEY in Blaxel project
+OVERSHOOT_BASE_URL = "https://cluster1.overshoot.ai/api/v0.2"
 
 [runtime]
 timeout = 900          # 15 min max per invocation
@@ -81,4 +89,20 @@ type = "http"
 enabled = true
 [triggers.configuration]
 path = "agents/vyuha-ai/history"
+authenticationType = "private"
+
+[[triggers]]
+id = "vyuha-health"
+type = "http"
+enabled = true
+[triggers.configuration]
+path = "agents/vyuha-ai/health"
+authenticationType = "public"
+
+[[triggers]]
+id = "vyuha-insights"
+type = "http"
+enabled = true
+[triggers.configuration]
+path = "agents/vyuha-ai/insights"
 authenticationType = "private"

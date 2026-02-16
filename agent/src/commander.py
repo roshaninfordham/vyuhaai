@@ -80,10 +80,16 @@ SYSTEM_PROMPT = """\
 You are Vyuha, an autonomous satellite defense commander.
 Your top priority is collision avoidance.
 
+You now have access to TWO sensor modalities:
+  1. Telemetry (Orbit Engine) — altitude, collision probability, status.
+  2. Optical Sensors (Visual Analysis) — description of the onboard camera feed.
+
 RULES:
 1. If collision_probability > 0.7 you MUST recommend action "FIRE_THRUSTERS".
 2. If collision_probability <= 0.7 you MUST recommend action "HOLD_POSITION".
-3. Explain your reasoning clearly in exactly one sentence.
+3. If Visual Analysis confirms debris or a collision risk, INCREASE your
+   confidence_score and cite "Optical Confirmation" in your reasoning.
+4. Explain your reasoning clearly in exactly one sentence.
 
 OUTPUT FORMAT:
 You must respond with strictly valid JSON — no Markdown fences, no comments,
@@ -165,8 +171,9 @@ def _call_llm_sync(messages: list[dict]) -> str:
 def analyze_situation(
     risk_data: dict,
     previous_rejection_reason: str | None = None,
+    visual_description: str = "No visual data.",
 ) -> dict:
-    """Feed telemetry data to the LLM and return a structured decision.
+    """Feed telemetry + visual data to the LLM and return a structured decision.
 
     Parameters
     ----------
@@ -177,6 +184,9 @@ def analyze_situation(
     previous_rejection_reason : str, optional
         If the Commander's prior response was blocked by the Shield,
         pass the rejection reason here so the model can self-correct.
+    visual_description : str
+        Description from the optical sensor / Overshoot AI vision analysis.
+        Defaults to "No visual data." if no vision feed is available.
 
     Returns
     -------
@@ -184,7 +194,7 @@ def analyze_situation(
         A decision object matching the JSON schema defined in
         ``SYSTEM_PROMPT``, or ``SAFETY_FALLBACK`` on error.
     """
-    # -- Build the user prompt with the relevant telemetry fields -----------
+    # -- Build the user prompt with telemetry + visual fields ---------------
     altitude = risk_data.get("altitude_km", "N/A")
     probability = risk_data.get("collision_probability", "N/A")
     status = risk_data.get("status", "N/A")
@@ -194,7 +204,9 @@ def analyze_situation(
         f"  • Altitude:              {altitude} km\n"
         f"  • Collision Probability: {probability}\n"
         f"  • Current Status:        {status}\n\n"
-        f"Analyze this data and provide your decision as JSON."
+        f"Optical sensor analysis:\n"
+        f"  {visual_description}\n\n"
+        f"Analyze ALL inputs (telemetry + visual) and provide your decision as JSON."
     )
 
     # -- Feedback loop: inject rejection context so the model self-corrects -

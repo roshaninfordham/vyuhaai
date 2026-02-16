@@ -105,30 +105,64 @@ Use **Scan SECTOR (LIVE)** for real telemetry, **Simulate Debris (DEMO)** to for
 
 ---
 
-## Deploy (Blaxel)
+## Deploy with Blaxel and White Circle AI
 
-The backend is deployable as a Blaxel agent for low-latency, scalable execution.
+The backend is deployed as a Blaxel agent. White Circle AI is used at runtime to validate every Commander command (Shield). Both must be configured for production.
 
-### Prerequisites
+### 1. Prerequisites
 
-- Blaxel CLI installed and logged in: `bl login <workspace>`
-- `blaxel.toml` and entrypoint already configured (see repo)
+- **Blaxel CLI** installed and logged in: `bl login <workspace>`
+- **White Circle AI** account: API key and Deployment ID (from [White Circle](https://us.whitecircle.ai) or your admin)
+- `blaxel.toml` and entrypoint are in the repo
 
-### Deploy
+### 2. Set environment variables in Blaxel
+
+Before or after first deploy, set these in your **Blaxel project** (dashboard or CLI):
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `WHITE_CIRCLE_API_KEY` | **Yes** | White Circle API key (secret) |
+| `WHITE_CIRCLE_DEPLOYMENT_ID` | **Yes** | White Circle deployment/policy ID for session check |
+| `WHITE_CIRCLE_BASE_URL` | No | Default `https://us.whitecircle.ai` (in `blaxel.toml` [env]) |
+| `WHITE_CIRCLE_VERSION` | No | Default `2025-12-01` (in `blaxel.toml` [env]) |
+| `BLAXEL_API_KEY` / workspace | Usually | Often auto-injected by Blaxel for model gateway |
+
+Without `WHITE_CIRCLE_API_KEY` and `WHITE_CIRCLE_DEPLOYMENT_ID`, the Shield falls back to local deny-list only; `/health` will report `white_circle_configured: false`.
+
+### 3. Deploy
 
 ```bash
 bl login rs
 bl deploy
 ```
 
-After deployment you will get a public base URL (e.g. `https://agt-vyuha-ai-xxxx.bl.run`). Set the dashboard to use it:
+Note the deployed base URL (e.g. `https://agt-vyuha-ai-xxxx.bl.run`).
+
+### 4. Point the dashboard at the deployed API
 
 ```bash
 export VYUHA_API_URL=https://agt-vyuha-ai-xxxx.bl.run
 streamlit run dashboard/app.py --server.port 8501
 ```
 
-For authenticated requests from the dashboard, set `BLAXEL_API_KEY` and `BLAXEL_WORKSPACE` in `.env` (or in the environment where Streamlit runs).
+For **authenticated** requests from the dashboard to the Blaxel agent, set in `.env` (or the environment where Streamlit runs):
+
+- `BLAXEL_API_KEY`
+- `BLAXEL_WORKSPACE=rs`
+
+### 5. Verify deployment
+
+1. **Health (Blaxel + White Circle)**  
+   ```bash
+   curl https://agt-vyuha-ai-xxxx.bl.run/health
+   ```  
+   Expect `"status": "ok"`, `"white_circle_configured": true` if White Circle env vars are set in Blaxel.
+
+2. **White Circle in action**  
+   Open the dashboard, click **Simulate Cyberattack**. You should see Attempt 1 (malicious command) **blocked** and Attempt 2 (safe command) **approved**. That confirms White Circle is validating and the system is resilient.
+
+3. **Endpoints**  
+   All triggers in `blaxel.toml` (scan, act, state, restore, history, health, insights) should be reachable at the deployed base URL.
 
 ---
 
@@ -183,6 +217,7 @@ For authenticated requests from the dashboard, set `BLAXEL_API_KEY` and `BLAXEL_
 
 ## Quick Verification
 
-- **Backend**: `curl http://localhost:8000/health`
-- **State**: `curl http://localhost:8000/state`
-- **Demo script**: `python scripts/demo_state_management.py` (requires backend running; set `BASE_URL` if not localhost)
+- **Local backend**: `curl http://localhost:8000/health` — check `white_circle_configured`
+- **Deployed (Blaxel)**: `curl https://<your-blaxel-url>/health` — same; ensures White Circle env is set in Blaxel
+- **White Circle API**: `python scripts/verify_whitecircle.py` — requires `.env` with `WHITE_CIRCLE_API_KEY` and `WHITE_CIRCLE_DEPLOYMENT_ID`
+- **State demo**: `python scripts/demo_state_management.py` (backend running; set `BASE_URL` if not localhost)

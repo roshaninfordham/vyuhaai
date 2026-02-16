@@ -181,6 +181,27 @@ st.markdown(
         color: #00aaff;
     }
 
+    /* ── Optical sensors ───────────────────────────────────────────────── */
+    .vision-report {
+        background: linear-gradient(135deg, #0d1520 0%, #111b26 100%);
+        border: 1px solid #1a3a1a; border-radius: 8px;
+        padding: 12px 16px; margin: 8px 0;
+        font-family: 'JetBrains Mono', monospace; font-size: 0.75rem;
+        color: #c5cdd9; line-height: 1.6;
+    }
+    .vision-report.debris-detected {
+        border-color: #ff3333;
+        background: linear-gradient(135deg, #1a0808 0%, #150505 100%);
+        color: #ff6666;
+    }
+    .vision-source-badge {
+        display: inline-block; font-family: 'JetBrains Mono', monospace;
+        font-size: 0.6rem; font-weight: 700; letter-spacing: 0.1em;
+        padding: 2px 8px; border-radius: 3px; margin-bottom: 6px;
+    }
+    .vision-source-badge.live { background: #0a2a0a; border: 1px solid #00ff41; color: #00ff41; }
+    .vision-source-badge.sim { background: #2a1a0a; border: 1px solid #ffaa00; color: #ffaa00; }
+
     /* ── Data source footer ──────────────────────────────────────────── */
     .data-source-bar {
         font-family: 'JetBrains Mono', monospace; font-size: 0.62rem;
@@ -380,7 +401,12 @@ def api_scan(simulate: bool) -> dict | None:
         add_log(f"SCAN FAILED: {exc}", "error")
         return None
 
-def api_act(risk_data: dict, session_id: str, simulate_cyberattack: bool = False) -> dict | None:
+def api_act(
+    risk_data: dict,
+    session_id: str,
+    simulate_cyberattack: bool = False,
+    visual_description: str = "No visual data.",
+) -> dict | None:
     try:
         r = requests.post(
             f"{API_URL}/act",
@@ -388,6 +414,7 @@ def api_act(risk_data: dict, session_id: str, simulate_cyberattack: bool = False
                 "risk_data": risk_data,
                 "session_id": session_id,
                 "simulate_cyberattack": simulate_cyberattack,
+                "visual_description": visual_description,
             },
             headers=_request_headers(),
             timeout=60,
@@ -607,6 +634,35 @@ with col_main:
                 f"status={rd.get('status', 'N/A')}",
                 language="text",
             )
+
+    # ── Optical Sensors (Multimodal — Overshoot AI) ─────────────────
+    st.markdown('<div class="section-label">📸 OPTICAL SENSORS</div>',
+                unsafe_allow_html=True)
+    vision_slot = st.container()
+    vr = scan.get("visual_report") if scan else None
+    with vision_slot:
+        if vr:
+            video_url = vr.get("video_url", "")
+            description = vr.get("description", "")
+            vsource = vr.get("source", "simulation")
+            badge_cls = "live" if vsource == "overshoot_ai" else "sim"
+            badge_label = "OVERSHOOT AI" if vsource == "overshoot_ai" else "SIMULATION"
+            is_debris = any(
+                kw in description.upper()
+                for kw in ["DEBRIS", "FRAGMENT", "COLLISION", "RISK", "OBJECT DETECTED"]
+            )
+            report_cls = "vision-report debris-detected" if is_debris else "vision-report"
+
+            if video_url:
+                st.video(video_url)
+            st.markdown(
+                f'<span class="vision-source-badge {badge_cls}">{badge_label}</span>'
+                f'<div class="{report_cls}">'
+                f'<b>AI ANALYSIS:</b> {description}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("No optical data yet — run a scan to activate camera sensor.")
 
     # ── Control buttons ───────────────────────────────────────────────
     st.markdown('<div class="section-label">COMMAND INTERFACE</div>',
@@ -883,6 +939,11 @@ elif triggered:
     st.session_state.scan_count += 1
     rd = scan_data["risk_data"]
 
+    # Extract visual report from scan
+    vr_from_scan = scan_data.get("visual_report", {})
+    vis_desc = vr_from_scan.get("description", "No visual data.")
+    vis_src = vr_from_scan.get("source", "none")
+
     scenario = rd.get("scenario_mode", "LIVE_OBSERVATION")
     add_log(
         f"Telemetry — Alt: {rd['altitude_km']:.1f} km | "
@@ -890,6 +951,7 @@ elif triggered:
         f"Status: {rd['status']} | Mode: {scenario}",
         "info",
     )
+    add_log(f"Optical sensor: {vis_src} — {vis_desc[:80]}...", "info")
 
     # Update globe
     globe_slot.plotly_chart(
@@ -910,7 +972,7 @@ elif triggered:
 
         with st.spinner("🚨  DEBRIS DETECTED — ACTIVATING VYUHA AGENT..."):
             session_id = f"dash-{st.session_state.scan_count:04d}"
-            act_data = api_act(rd, session_id)
+            act_data = api_act(rd, session_id, visual_description=vis_desc)
 
         if not act_data:
             with log_slot.container():

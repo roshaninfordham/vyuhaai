@@ -68,6 +68,7 @@ from agent.src import commander, security  # noqa: E402
 from agent.src.learning_engine import get_insights, record_event  # noqa: E402
 from agent.src.orbit_tools import check_conjunction_risk  # noqa: E402
 from agent.src import state_manager  # noqa: E402
+from agent.src.vision_tools import analyze_visual_feed  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -107,6 +108,10 @@ class ManeuverRequest(BaseModel):
     simulate_cyberattack: bool = Field(
         default=False,
         description="If True, inject a synthetic malicious first attempt (indirect prompt injection) so White Circle blocks it; then run normal Commander for resilience demo.",
+    )
+    visual_description: str = Field(
+        default="No visual data.",
+        description="Optical sensor analysis from /scan visual_report.description.",
     )
 
 
@@ -165,11 +170,17 @@ async def add_request_metadata(request: Request, call_next):
 
 @app.get("/health")
 async def health_check():
+    """Liveness and deployment verification (Blaxel + White Circle)."""
+    wc_configured = bool(
+        os.getenv("WHITE_CIRCLE_API_KEY")
+        and os.getenv("WHITE_CIRCLE_DEPLOYMENT_ID"),
+    )
     return {
         "status": "ok",
         "service": "vyuha-ai",
         "blaxel_sdk": _BLAXEL_READY,
         "blaxel_telemetry": _BLAXEL_TELEMETRY,
+        "white_circle_configured": wc_configured,
     }
 
 
@@ -275,14 +286,18 @@ async def scan_satellite(
             "",                       # auto-fetch TLE
             simulate_danger,          # force_critical flag
         )
+        # Visual threat detection (multimodal — Overshoot AI)
+        visual_report = await asyncio.to_thread(analyze_visual_feed)
+
         elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
         logger.info(
-            "Scan complete for %s — prob=%.4f status=%s mode=%s source=%s",
+            "Scan complete for %s — prob=%.4f status=%s mode=%s source=%s vision=%s",
             request.satellite_id,
             risk_data.get("collision_probability", -1),
             risk_data.get("status", "?"),
             risk_data.get("scenario_mode", "?"),
             risk_data.get("data_source", "?"),
+            visual_report.get("source", "?"),
         )
         record_event(
             "scan",
@@ -293,12 +308,14 @@ async def scan_satellite(
                 "scenario_mode": risk_data.get("scenario_mode"),
                 "collision_probability": risk_data.get("collision_probability"),
                 "distance_to_debris_km": risk_data.get("distance_to_debris_km"),
+                "visual_source": visual_report.get("source"),
                 "latency_ms": elapsed_ms,
             },
         )
         return {
             "satellite_id": request.satellite_id,
             "risk_data": risk_data,
+            "visual_report": visual_report,
             "latency_ms": elapsed_ms,
         }
     except Exception as exc:
@@ -345,6 +362,7 @@ async def act_on_risk(request: ManeuverRequest):
     risk_data = request.risk_data
     session_id = request.session_id
     simulate_cyberattack = request.simulate_cyberattack
+    visual_description = request.visual_description
 
     rejection_reason: str | None = None
     attempts_log: list[dict] = []
@@ -363,6 +381,7 @@ async def act_on_risk(request: ManeuverRequest):
                 commander.analyze_situation,
                 risk_data,
                 rejection_reason,
+                visual_description,
             )
 
         # --- Step 2: Shield validates (sync → thread) --------------------
